@@ -1,0 +1,78 @@
+{
+  "name": "opentelemetry-instrumentation-js",
+  "version": "1.0.0",
+  "description": "Universal Observability Instrumentation for JavaScript Applications",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./preload": "./dist/preload.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "opentelemetry",
+    "observability",
+    "tracing",
+    "metrics",
+    "instrumentation"
+  ],
+  "author": "Leonardo Zwirtes",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
+    "eslint": "^10.0.0",
+    "eslint-plugin-prettier": "^5.5.5",
+    "jest": "^30.2.0",
+    "prettier": "^3.8.1",
+    "ts-jest": "^29.4.6",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.0"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.5.1",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.212.0",
+    "@opentelemetry/exporter-metrics-otlp-proto": "^0.212.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.212.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.212.0",
+    "@opentelemetry/instrumentation-dns": "^0.55.0",
+    "@opentelemetry/instrumentation-express": "^0.60.0",
+    "@opentelemetry/instrumentation-fastify": "^0.56.0",
+    "@opentelemetry/instrumentation-fetch": "^0.212.0",
+    "@opentelemetry/instrumentation-generic-pool": "^0.55.0",
+    "@opentelemetry/instrumentation-graphql": "^0.59.0",
+    "@opentelemetry/instrumentation-http": "^0.212.0",
+    "@opentelemetry/instrumentation-ioredis": "^0.60.0",
+    "@opentelemetry/instrumentation-knex": "^0.56.0",
+    "@opentelemetry/instrumentation-koa": "^0.60.0",
+    "@opentelemetry/instrumentation-mongodb": "^0.65.0",
+    "@opentelemetry/instrumentation-mongoose": "^0.58.0",
+    "@opentelemetry/instrumentation-mysql2": "^0.58.0",
+    "@opentelemetry/instrumentation-nestjs-core": "^0.58.0",
+    "@opentelemetry/instrumentation-net": "^0.56.0",
+    "@opentelemetry/instrumentation-pg": "^0.64.0",
+    "@opentelemetry/instrumentation-pino": "^0.58.0",
+    "@opentelemetry/instrumentation-redis": "^0.60.0",
+    "@opentelemetry/instrumentation-winston": "^0.56.0",
+    "@opentelemetry/resources": "^2.5.1",
+    "@opentelemetry/sdk-metrics": "^2.5.1",
+    "@opentelemetry/sdk-node": "^0.212.0",
+    "@opentelemetry/sdk-trace-base": "^2.5.1",
+    "@opentelemetry/sdk-trace-node": "^2.5.1",
+    "@opentelemetry/semantic-conventions": "^1.39.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
