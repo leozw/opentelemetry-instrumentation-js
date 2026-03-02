@@ -1,13 +1,13 @@
-import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
+import { PeriodicExportingMetricReader, PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import {
   AlwaysOffSampler,
   BatchSpanProcessor,
   ConsoleSpanExporter,
   Sampler,
-  SpanProcessor,
   SpanExporter,
+  SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { ExporterFactory, RedactingSpanExporter, ResolvedPrivacyConfig } from '../core/exporter';
 import { MetricFacade } from '../core/metrics';
 import { NetworkPropagator } from '../core/propagation';
@@ -89,11 +89,17 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
       })
       : [];
 
+    if (instrumentations.length > 0) {
+      registerInstrumentations({
+        instrumentations,
+      });
+    }
+
     runtimeInstance = new NodeRuntime({
       resource,
       sampler,
       textMapPropagator: propagator,
-      instrumentations,
+      instrumentations: [], // Already registered synchronously above
       metricReaders,
       spanProcessors,
       views: [
@@ -290,3 +296,4 @@ function registerGracefulShutdownHook(): void {
 
 export { MetricFacade } from '../core/metrics';
 export { TracerFacade } from '../core/tracing';
+
