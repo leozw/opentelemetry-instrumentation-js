@@ -6,7 +6,7 @@ export default tseslint.config(
   ...tseslint.configs.strict,
   ...tseslint.configs.stylistic,
   {
-    ignores: ['dist', 'node_modules', 'coverage', '*.js', '*.mjs'],
+    ignores: ['dist', 'node_modules', 'coverage', '**/*.js', '*.mjs', '*.cjs', 'tests/**', 'benchmarks/**'],
   },
   {
     rules: {

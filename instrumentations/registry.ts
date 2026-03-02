@@ -29,19 +29,6 @@ export interface InstrumentationEntry {
 }
 
 /**
- * Check if a module is installed in the consuming application.
- * Uses a safe require.resolve to avoid loading the module.
- */
-function isModuleInstalled(moduleName: string): boolean {
-  try {
-    require.resolve(moduleName);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Check if an instrumentation is enabled via env var.
  * Default: enabled (true). Only disabled when explicitly set to 'false'.
  */
@@ -219,17 +206,11 @@ export function resolveInstrumentations(): Instrumentation[] {
   const registry = getRegistry();
   const active: Instrumentation[] = [];
   const activeNames: string[] = [];
-  const skipped: string[] = [];
   const disabled: string[] = [];
 
   for (const entry of registry) {
     if (!isEnabled(entry.envKey, entry.defaultEnabled ?? true)) {
       disabled.push(entry.name);
-      continue;
-    }
-
-    if (!isModuleInstalled(entry.pkg)) {
-      skipped.push(entry.name);
       continue;
     }
 
@@ -247,9 +228,6 @@ export function resolveInstrumentations(): Instrumentation[] {
   }
   if (disabled.length > 0) {
     console.log(`[instrumentation-js] ⛔ Disabled via env: ${disabled.join(', ')}`);
-  }
-  if (skipped.length > 0) {
-    console.log(`[instrumentation-js] ⏭️  Skipped (not installed): ${skipped.join(', ')}`);
   }
 
   return active;
