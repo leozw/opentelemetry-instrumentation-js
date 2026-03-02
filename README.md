@@ -1,58 +1,46 @@
-# OpenTelemetry Instrumentation JS
+# OpenTelemetry Instrumentation JS (v2)
 
-> **Production-Grade**: High-performance, resilient, zero-config observability for modern JavaScript applications.
+Node-first OpenTelemetry bootstrap for JavaScript services, focused on:
 
-[![License](https://img.shields.io/npm/l/opentelemetry-instrumentation-js)](https://github.com/leozw/opentelemetry-instrumentation-js)
-[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue)](https://www.typescriptlang.org/)
+- deterministic startup/shutdown lifecycle
+- explicit feature toggles (`tracing`, `metrics`, `instrumentations`)
+- strict privacy defaults (`db.statement` redaction + `user.id` hashing)
+- OTLP exporter compatibility without vendor lock-in
+- log correlation only (no log-export pipeline inside this package)
 
-This library provides a **battery-included** but strictly modular instrumentation for specialized environments (Node.js, Serverless, Edge). It adheres to strict Semantic Conventions and ensures production-grade resiliency.
-
-## 🌟 Key Features
-
-- **Universal Core**: Unified logic for Tracing, Metrics, and Log Correlation.
-- **Zero-Code Mode**: Auto-instrumentation without touching your application code.
-- **Smart Auto-Discovery**: Automatically detects installed modules (pg, mongodb, ioredis, etc.) and creates trace spans.
-- **Env Toggles**: Enable/disable any instrumentation via `OTEL_INSTR_*` environment variables.
-- **Strict Typing**: Built with `strict: true` and `noImplicitAny` for TypeScript safety.
-- **Resilient**: Built-in Circuit Breakers and Fallback mechanisms for exporters.
-- **Performance**: Uses `AsyncLocalStorage` for zero-overhead context propagation.
-- **Vendor Neutral**: Fully OTLP compatible (gRPC/HTTP).
-
----
-
-## 🚀 Installation
+## Installation
 
 ```bash
-npm install opentelemetry-instrumentation-js
+npm install elven-opentelemetry-instrumentation-js
 ```
 
-## 🛠 Usage
+## Runtime support
 
-### 1. Zero-Code (Recommended)
+v2 supports `runtime: 'node'` only.
 
-Run your application with the preloader. This automatically detects your environment and sets up instrumentation.
+Passing `runtime: 'serverless'` or `runtime: 'edge'` throws an explicit error.
 
-**Environment Variables:**
+## Zero-code preload
 
 ```bash
-export OTEL_SERVICE_NAME="my-payment-service"
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+export OTEL_SERVICE_NAME="my-service"
+export OTEL_SERVICE_VERSION="1.0.0"
+node --require elven-opentelemetry-instrumentation-js/preload app.js
 ```
 
-**Run:**
+Disable preload initialization explicitly:
 
 ```bash
-node --require opentelemetry-instrumentation-js/preload app.js
+export OTEL_ZERO_CODE=false
 ```
 
-### 2. Manual Initialization
-
-For more control, initialize the library at the very top of your entry file.
+## Manual initialization
 
 ```typescript
-import { initObservability } from 'opentelemetry-instrumentation-js';
+import { initObservability } from 'elven-opentelemetry-instrumentation-js';
 
-await initObservability({
+const observability = await initObservability({
+  runtime: 'node',
   service: {
     serviceName: 'my-payment-service',
     serviceVersion: '1.0.0',
@@ -60,100 +48,90 @@ await initObservability({
   },
   exporters: {
     protocol: 'grpc', // or 'http/protobuf'
-    url: 'http://localhost:4317',
     compression: 'gzip',
   },
-  sampling: {
-    ratio: 1.0,
-    rules: [{ attributeKey: 'http.route', attributeValue: '/checkout', decision: 1 }],
+  tracing: {
+    enabled: true,
+    sampling: {
+      ratio: 1.0,
+    },
+  },
+  metrics: {
+    enabled: true,
+    exportIntervalMillis: 60000,
+  },
+  privacy: {
+    redactDbStatement: true,
+    hashUserId: true,
+    allowRawAttributes: [],
+  },
+  instrumentations: {
+    http: { enabled: true },
+    express: { enabled: true },
+    pg: { enabled: true },
+    pino: { enabled: true },
+    winston: { enabled: true },
   },
 });
+
+await observability.forceFlush();
+await observability.shutdown();
 ```
 
----
+## Public API (v2)
 
-## 🧩 Architecture
+`initObservability(config)` returns an `ObservabilityHandle`:
 
-The library is designed with a Clean Architecture approach:
+- `tracer`
+- `metrics`
+- `shutdown(): Promise<void>`
+- `forceFlush(): Promise<void>`
+- `isStarted(): boolean`
 
-- **`core/`**: Pure logic for Context, Resources, Sampling, and Attributes. No runtime dependencies.
-- **`runtime/`**: Adapters for specific environments (Node, Lambda, Cloudflare Workers).
-- **`instrumentations/`**: Auto-wiring for popular frameworks, databases, caches, and ORMs.
-- **`api/`**: Public-facing Facades for Tracing and Metrics to simplify usage.
+The initializer is idempotent and protects against duplicate concurrent startup.
 
----
+## Feature precedence
 
-## 📦 Auto-Discovered Instrumentations
+For booleans, precedence is:
 
-These instrumentations are automatically activated when the target module is detected in your project. **No configuration needed.**
+1. explicit config
+2. env var
+3. package default
 
-| Category          | Module         | Env Toggle                | What it traces              |
-| ----------------- | -------------- | ------------------------- | --------------------------- |
-| **HTTP**          | `http`/`https` | _(always on)_             | HTTP request/response spans |
-| **Framework**     | `express`      | _(always on)_             | Express middleware & routes |
-| **Framework**     | `fastify`      | _(always on)_             | Fastify handlers            |
-| **API**           | `graphql`      | _(always on)_             | GraphQL resolvers & queries |
-| **Database**      | `pg`           | `OTEL_INSTR_PG`           | PostgreSQL queries          |
-| **Database**      | `mysql2`       | `OTEL_INSTR_MYSQL`        | MySQL queries               |
-| **Database**      | `mongodb`      | `OTEL_INSTR_MONGODB`      | MongoDB operations          |
-| **ORM**           | `mongoose`     | `OTEL_INSTR_MONGOOSE`     | Mongoose operations         |
-| **Cache**         | `ioredis`      | `OTEL_INSTR_REDIS`        | Redis commands (ioredis)    |
-| **Cache**         | `redis`        | `OTEL_INSTR_REDIS`        | Redis commands (node-redis) |
-| **Query Builder** | `knex`         | `OTEL_INSTR_KNEX`         | Knex queries                |
-| **Pool**          | `generic-pool` | `OTEL_INSTR_GENERIC_POOL` | Connection pool lifecycle   |
-| **Framework**     | `@nestjs/core` | `OTEL_INSTR_NESTJS`       | NestJS handlers             |
-| **Framework**     | `koa`          | `OTEL_INSTR_KOA`          | Koa middleware              |
-| **Network**       | `dns`          | `OTEL_INSTR_DNS`          | DNS lookups _(opt-in)_      |
-| **Network**       | `net`          | `OTEL_INSTR_NET`          | TCP connections _(opt-in)_  |
-| **Logging**       | `pino`         | `OTEL_INSTR_PINO`         | Pino log correlation        |
-| **Logging**       | `winston`      | `OTEL_INSTR_WINSTON`      | Winston log correlation     |
+Examples:
 
-### Disabling an instrumentation
+- `OTEL_TRACES_EXPORTER=none` disables traces by default
+- `tracing.enabled: true` overrides that default
+- `OTEL_INSTR_PG=false` disables PG instrumentation unless explicitly enabled in config
 
-```bash
-export OTEL_INSTR_PG=false      # Disable PostgreSQL tracing
-export OTEL_INSTR_REDIS=false   # Disable Redis tracing
-```
+## Auto-discovered instrumentations
 
-### Enabling opt-in instrumentations
+Instrumentation is activated only when the target module is installed and enabled.
 
-```bash
-export OTEL_INSTR_DNS=true      # Enable DNS tracing (disabled by default)
-export OTEL_INSTR_NET=true      # Enable TCP tracing (disabled by default)
-```
+Supported:
 
----
+- HTTP, Express, Fastify, GraphQL
+- PostgreSQL, MySQL2, MongoDB, Mongoose
+- Redis (`redis` and `ioredis`), Knex, generic-pool
+- NestJS, Koa
+- DNS, Net (default off)
+- Pino and Winston (correlation only)
 
-## ⚙️ Configuration Reference
+## Privacy defaults
 
-| Option                   | Type                        | Default           | Description                               |
-| ------------------------ | --------------------------- | ----------------- | ----------------------------------------- |
-| `service.serviceName`    | `string`                    | `unknown_service` | Name of your service.                     |
-| `service.serviceVersion` | `string`                    | `unknown`         | Version of your service.                  |
-| `exporters.protocol`     | `'grpc' \| 'http/protobuf'` | `'http/protobuf'` | OTLP transport protocol.                  |
-| `exporters.compression`  | `'gzip' \| 'none'`          | `'none'`          | Compression for OTLP export.              |
-| `sampling.ratio`         | `number`                    | `1.0`             | Probabilistic sampling ratio (0.0 - 1.0). |
+Default privacy policy:
 
----
+- redact `db.statement` and `db.query.text`
+- hash `user.id` and `enduser.id`
+- allowlist raw attributes via `privacy.allowRawAttributes`
 
-## 🤝 Contributing
-
-We enforce strict quality standards:
-
-1. **No `any`**: All code must be strictly typed.
-2. **Lint**: `npm run lint` must pass.
-3. **Format**: Code must be formatted with Prettier.
-
-### Build & Test
+## Development
 
 ```bash
-npm install
-npm run build
 npm run lint
+npm run typecheck
+npm test
+npm run benchmark
 ```
 
----
-
-## 📄 License
-
-Apache-2.0
+`npm run benchmark:ci` enforces the p95 latency overhead budget (`< 3%`).

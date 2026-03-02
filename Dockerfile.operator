@@ -1,0 +1,33 @@
+# Stage 1: Build the library from source
+FROM node:20-alpine AS build
+
+WORKDIR /build
+# Copy the local source code
+COPY . .
+# Install dependencies and build
+RUN npm ci
+RUN npm run build
+# Pack the directory into a tarball (creates elven-opentelemetry-instrumentation-js-1.0.0.tgz)
+RUN npm pack
+
+# Stage 2: Create the payload directory expected by the OTel Operator
+WORKDIR /autoinstrumentation
+# Initialize an empty npm project and install the tarball
+RUN npm init -y
+RUN npm install /build/elven-opentelemetry-instrumentation-js-*.tgz --production
+
+# The OpenTelemetry Kubernetes Operator automatically injects the following variable into your pods:
+# NODE_OPTIONS="--require /otel-auto-instrumentation/autoinstrumentation.js"
+# So we create this exact file to serve as the bridge to our library.
+RUN echo "require('elven-opentelemetry-instrumentation-js/preload');" > autoinstrumentation.js
+
+
+# Stage 3: Final lightweight image (busybox is all we need to hold the files)
+FROM busybox:latest
+
+# The K8s Operator uses an Init Container from this image that copies `/autoinstrumentation`
+# out to a shared volume mounted into the application container.
+COPY --from=build /autoinstrumentation /autoinstrumentation
+
+# Ensure any user in the app container can read the files
+RUN chmod -R go+r /autoinstrumentation
