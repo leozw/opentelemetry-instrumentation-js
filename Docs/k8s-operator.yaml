@@ -1,0 +1,35 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: my-instrumentation
+  # namespace: my-app-namespace
+spec:
+  exporter:
+    endpoint: "http://otel-collector.monitoring.svc.cluster.local:4318"
+  propagators:
+    - tracecontext
+    - baggage
+  sampler:
+    type: parentbased_traceidratio
+    argument: "1"
+
+  # Define Node.js configuration
+  nodejs:
+    # Set this to the repository where you push your Dockerfile.operator build:
+    image: "docker.io/elvenobservability/nodejs-k8s-operator:latest"
+    env:
+      - name: OTEL_METRICS_EXPORTER
+        value: "otlp"
+      - name: OTEL_TRACES_EXPORTER
+        value: "otlp"
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: "http://otel-collector.monitoring.svc.cluster.local:4318/v1/metrics"
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: "http://otel-collector.monitoring.svc.cluster.local:4318/v1/traces"
+      
+      # Since we added custom environment toggles in the library,
+      # you can disable specific modules right here via the Operator:
+      # - name: OTEL_INSTR_REDIS
+      #   value: "false"
+      
+      # By default, everything installed will be discovered!

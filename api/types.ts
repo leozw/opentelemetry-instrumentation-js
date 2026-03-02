@@ -1,6 +1,25 @@
 import { ExporterConfig } from '../core/exporter';
 import { ResourceConfig } from '../core/resources';
 import { SmartSamplerConfig } from '../core/sampler';
+import { InstrumentationsConfig } from '../instrumentations/config';
+import { MetricFacade } from '../core/metrics';
+import { TracerFacade } from '../core/tracing';
+
+export interface TracingConfig {
+  enabled?: boolean;
+  sampling?: SmartSamplerConfig;
+}
+
+export interface MetricsConfig {
+  enabled?: boolean;
+  exportIntervalMillis?: number;
+}
+
+export interface PrivacyConfig {
+  redactDbStatement?: boolean;
+  hashUserId?: boolean;
+  allowRawAttributes?: string[];
+}
 
 export interface ObservabilityConfig {
   /**
@@ -10,54 +29,41 @@ export interface ObservabilityConfig {
 
   /**
    * Exporter configuration.
-   * Defaults to OTLP gRPC at localhost:4317.
+   * Defaults to OTLP HTTP/protobuf.
    */
   exporters?: ExporterConfig;
 
   /**
-   * Sampling configuration.
-   */
-  sampling?: SmartSamplerConfig;
-
-  /**
    * Runtime environment.
-   * Defaults to 'node'.
+   * v2 supports only node runtime.
    */
   runtime?: 'node' | 'serverless' | 'edge';
 
   /**
-   * Instrumentations configuration.
-   * Pass explicit list or boolean to enable/disable defaults.
+   * Tracing feature config.
    */
-  instrumentations?: {
-    http?: boolean;
-    express?: boolean;
-    fastify?: boolean;
-    graphql?: boolean;
-    pg?: boolean;
-    mysql?: boolean;
-    mongodb?: boolean;
-    mongoose?: boolean;
-    redis?: boolean;
-    knex?: boolean;
-    genericPool?: boolean;
-    nestjs?: boolean;
-    koa?: boolean;
-    dns?: boolean;
-    net?: boolean;
-    pino?: boolean;
-    winston?: boolean;
-  } | boolean;
+  tracing?: TracingConfig;
 
   /**
-   * Enable/Disable metrics.
-   * Default: true
+   * Metrics feature config.
    */
-  metrics?: boolean;
+  metrics?: MetricsConfig;
 
   /**
-   * Enable/Disable tracing.
-   * Default: true
+   * Instrumentation toggles.
    */
-  tracing?: boolean;
+  instrumentations?: InstrumentationsConfig;
+
+  /**
+   * Privacy defaults for attribute sanitization.
+   */
+  privacy?: PrivacyConfig;
+}
+
+export interface ObservabilityHandle {
+  tracer: TracerFacade;
+  metrics: MetricFacade;
+  shutdown(): Promise<void>;
+  forceFlush(): Promise<void>;
+  isStarted(): boolean;
 }

@@ -23,9 +23,9 @@ export class ResourceBuilder {
       [SemanticResourceAttributes.SERVICE_NAME]: this._config.serviceName,
       [SemanticResourceAttributes.SERVICE_VERSION]: this._config.serviceVersion,
       'host.name': os.hostname(),
-      'telemetry.sdk.language': 'nodejs',
-      'telemetry.sdk.name': '@opentelemetry/instrumentation-js',
-      'telemetry.sdk.version': '1.0.0',
+      [SemanticResourceAttributes.PROCESS_PID]: process.pid,
+      [SemanticResourceAttributes.PROCESS_RUNTIME_NAME]: 'nodejs',
+      [SemanticResourceAttributes.PROCESS_RUNTIME_VERSION]: process.version,
     };
 
     if (this._config.deploymentEnvironment) {

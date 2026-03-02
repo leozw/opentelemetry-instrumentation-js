@@ -1,29 +1,31 @@
 import { Sampler, TextMapPropagator } from '@opentelemetry/api';
 import { Instrumentation } from '@opentelemetry/instrumentation';
 import { Resource } from '@opentelemetry/resources';
-import { MetricReader } from '@opentelemetry/sdk-metrics';
-import { NodeSDK } from '@opentelemetry/sdk-node';
+import { MetricReader, ViewOptions } from '@opentelemetry/sdk-metrics';
+import { NodeSDK, NodeSDKConfiguration } from '@opentelemetry/sdk-node';
 import { SpanProcessor } from '@opentelemetry/sdk-trace-base';
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Detector = any;
 
 export interface NodeRuntimeConfig {
   resource: Resource;
-  resourceDetectors?: Detector[];
+  resourceDetectors?: NodeSDKConfiguration['resourceDetectors'];
   spanProcessors?: SpanProcessor[];
   metricReaders?: MetricReader[];
   sampler?: Sampler;
   textMapPropagator?: TextMapPropagator | null;
   instrumentations?: Instrumentation[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  views?: any[];
+  views?: ViewOptions[];
 }
 
 export class NodeRuntime {
   private _sdk: NodeSDK;
+  private _spanProcessors: SpanProcessor[];
+  private _metricReaders: MetricReader[];
+  private _started = false;
 
   constructor(config: NodeRuntimeConfig) {
+    this._spanProcessors = config.spanProcessors ?? [];
+    this._metricReaders = config.metricReaders ?? [];
+
     this._sdk = new NodeSDK({
       resource: config.resource,
       resourceDetectors: config.resourceDetectors ?? [],
@@ -38,11 +40,28 @@ export class NodeRuntime {
     });
   }
 
-  public start() {
-    this._sdk.start();
+  public async start(): Promise<void> {
+    if (this._started) return;
+    await Promise.resolve(this._sdk.start());
+    this._started = true;
   }
 
-  public async shutdown() {
+  public async forceFlush(): Promise<void> {
+    await Promise.all([
+      ...this._spanProcessors.map((processor) => processor.forceFlush()),
+      ...this._metricReaders
+        .filter((reader): reader is MetricReader & { forceFlush: () => Promise<void> } => 'forceFlush' in reader)
+        .map((reader) => reader.forceFlush()),
+    ]);
+  }
+
+  public async shutdown(): Promise<void> {
+    if (!this._started) return;
     await this._sdk.shutdown();
+    this._started = false;
+  }
+
+  public isStarted(): boolean {
+    return this._started;
   }
 }
