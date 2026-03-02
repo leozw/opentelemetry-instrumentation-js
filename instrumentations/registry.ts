@@ -14,6 +14,8 @@
  * No crashes, no warnings — just smart defaults.
  */
 import { Instrumentation } from '@opentelemetry/instrumentation';
+import { ResolvedPrivacyConfig } from '../core/exporter/index';
+import { InstrumentationsConfig } from './config';
 
 export interface InstrumentationEntry {
   /** Human-readable name (for logging) */
@@ -25,7 +27,12 @@ export interface InstrumentationEntry {
   /** Whether this instrumentation is enabled by default (default: true) */
   defaultEnabled?: boolean;
   /** Factory that creates the instrumentation instance */
-  factory: () => Instrumentation;
+  factory: (privacy: ResolvedPrivacyConfig) => Instrumentation;
+}
+
+export interface ResolveInstrumentationsOptions {
+  config?: InstrumentationsConfig;
+  privacy: ResolvedPrivacyConfig;
 }
 
 /**
@@ -202,7 +209,7 @@ export function getRegistry(): InstrumentationEntry[] {
  *
  * Returns the list of active Instrumentation instances + logs what was activated.
  */
-export function resolveInstrumentations(): Instrumentation[] {
+export function resolveInstrumentations(options: ResolveInstrumentationsOptions): Instrumentation[] {
   const registry = getRegistry();
   const active: Instrumentation[] = [];
   const activeNames: string[] = [];
@@ -215,7 +222,7 @@ export function resolveInstrumentations(): Instrumentation[] {
     }
 
     try {
-      active.push(entry.factory());
+      active.push(entry.factory(options.privacy));
       activeNames.push(entry.name);
     } catch (err) {
       console.warn(`[instrumentation-js] Failed to load ${entry.name}:`, err);
