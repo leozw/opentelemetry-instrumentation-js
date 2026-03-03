@@ -4,7 +4,8 @@ import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express';
 import { FastifyInstrumentation } from '@opentelemetry/instrumentation-fastify';
 import { GraphQLInstrumentation } from '@opentelemetry/instrumentation-graphql';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
-import { IncomingMessage, ServerResponse } from 'http';
+import type { ServerResponse } from 'http';
+import { ResolvedPrivacyConfig } from '../core/exporter';
 import {
   INSTRUMENTATION_DEFAULTS,
   INSTRUMENTATION_ENV_KEYS,
@@ -12,7 +13,6 @@ import {
   resolveEnabled,
 } from './config';
 import { resolveInstrumentations } from './registry';
-import { ResolvedPrivacyConfig } from '../core/exporter';
 
 export interface BuildInstrumentationsOptions {
   config?: InstrumentationsConfig;
@@ -45,7 +45,7 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
     builtIn.push(
       new HttpInstrumentation({
         requestHook: (_span, request) => {
-          if (!(request instanceof IncomingMessage)) return;
+          if (!('headers' in request)) return;
           const size = request.headers['content-length'];
           if (!size) return;
           const sizeVal = parseInt(String(size), 10);
@@ -54,7 +54,7 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
           }
         },
         applyCustomAttributesOnSpan: (_span, request, response) => {
-          if (!(request instanceof IncomingMessage)) return;
+          if (!('headers' in request)) return;
           const castResponse = response as ServerResponse;
           const attributes: Attributes = {};
           if (request.method) attributes['http.request.method'] = request.method;

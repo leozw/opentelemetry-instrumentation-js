@@ -1,6 +1,6 @@
 {
   "name": "elven-opentelemetry-instrumentation-js",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Universal Observability Instrumentation for JavaScript Applications",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -90,7 +90,9 @@
     "@opentelemetry/sdk-node": "^0.212.0",
     "@opentelemetry/sdk-trace-base": "^2.5.1",
     "@opentelemetry/sdk-trace-node": "^2.5.1",
-    "@opentelemetry/semantic-conventions": "^1.39.0"
+    "@opentelemetry/semantic-conventions": "^1.39.0",
+    "axios": "^1.13.6",
+    "express": "^5.2.1"
   },
   "engines": {
     "node": ">=18"
