@@ -99,7 +99,9 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
       resource,
       sampler,
       textMapPropagator: propagator,
-      instrumentations: [], // Already registered synchronously above
+      // We still register synchronously above for early requires, but we MUST pass them 
+      // here as well so NodeSDK will call setMeterProvider() on them when it starts.
+      instrumentations,
       metricReaders,
       spanProcessors,
       views: [
@@ -256,8 +258,13 @@ function resolveMetricsEnabled(config: ObservabilityConfig): boolean {
 }
 
 function resolvePrivacyConfig(config: ObservabilityConfig): ResolvedPrivacyConfig {
+  const envRedact = resolveBooleanEnv(
+    process.env.OTEL_PRIVACY_REDACT_DB_STATEMENT ||
+    process.env.OTEL_INSTRUMENTATION_DB_STATEMENT_REDACTION
+  );
+
   return {
-    redactDbStatement: config.privacy?.redactDbStatement ?? true,
+    redactDbStatement: envRedact ?? config.privacy?.redactDbStatement ?? true,
     hashUserId: config.privacy?.hashUserId ?? true,
     allowRawAttributes: config.privacy?.allowRawAttributes ?? [],
   };

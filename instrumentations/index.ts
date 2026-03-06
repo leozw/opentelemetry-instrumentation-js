@@ -1,18 +1,10 @@
 import { Attributes, Histogram, Meter, metrics } from '@opentelemetry/api';
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { Instrumentation } from '@opentelemetry/instrumentation';
-import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express';
-import { FastifyInstrumentation } from '@opentelemetry/instrumentation-fastify';
-import { GraphQLInstrumentation } from '@opentelemetry/instrumentation-graphql';
-import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import type { ServerResponse } from 'http';
 import { ResolvedPrivacyConfig } from '../core/exporter';
-import {
-  INSTRUMENTATION_DEFAULTS,
-  INSTRUMENTATION_ENV_KEYS,
-  InstrumentationsConfig,
-  resolveEnabled,
-} from './config';
-import { resolveInstrumentations } from './registry';
+import { InstrumentationsConfig } from './config';
+import { getAutoInstrumentationsConfig } from './registry';
 
 export interface BuildInstrumentationsOptions {
   config?: InstrumentationsConfig;
@@ -39,79 +31,53 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
     return { requestSizeHistogram, responseSizeHistogram };
   };
 
-  const builtIn: Instrumentation[] = [];
+  const autoConfig = getAutoInstrumentationsConfig(options);
 
-  if (isBuiltInEnabled('http', options.config)) {
-    builtIn.push(
-      new HttpInstrumentation({
-        requestHook: (_span, request) => {
-          if (!('headers' in request)) return;
-          const size = request.headers['content-length'];
-          if (!size) return;
-          const sizeVal = parseInt(String(size), 10);
-          if (!isNaN(sizeVal)) {
-            getHistograms();
+  // Apply our custom HTTP hooks on top of whatever config was resolved
+  const httpConfig = (autoConfig['@opentelemetry/instrumentation-http'] as Record<string, unknown>) || {};
+  if (httpConfig.enabled !== false) {
+    autoConfig['@opentelemetry/instrumentation-http'] = {
+      ...httpConfig,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      requestHook: (_span: any, request: any) => {
+        if (!request || typeof request !== 'object' || !('headers' in request)) return;
+        const size = request.headers['content-length'];
+        if (!size) return;
+        const sizeVal = parseInt(String(size), 10);
+        if (!isNaN(sizeVal)) {
+          getHistograms();
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      applyCustomAttributesOnSpan: (_span: any, request: any, response: any) => {
+        if (!request || typeof request !== 'object' || !('headers' in request)) return;
+        const castResponse = response as ServerResponse;
+        const attributes: Attributes = {};
+        if (request.method) attributes['http.request.method'] = request.method;
+        if (castResponse.statusCode) attributes['http.response.status_code'] = castResponse.statusCode;
+
+        const { requestSizeHistogram: reqHist, responseSizeHistogram: resHist } = getHistograms();
+        if (!reqHist || !resHist) return;
+
+        const respSize = castResponse.getHeader('content-length');
+        if (respSize) {
+          const val = parseInt(String(respSize), 10);
+          if (!isNaN(val)) {
+            resHist.record(val, attributes);
           }
-        },
-        applyCustomAttributesOnSpan: (_span, request, response) => {
-          if (!('headers' in request)) return;
-          const castResponse = response as ServerResponse;
-          const attributes: Attributes = {};
-          if (request.method) attributes['http.request.method'] = request.method;
-          if (castResponse.statusCode) attributes['http.response.status_code'] = castResponse.statusCode;
+        }
 
-          const { requestSizeHistogram: reqHist, responseSizeHistogram: resHist } = getHistograms();
-          if (!reqHist || !resHist) return;
-
-          const respSize = castResponse.getHeader('content-length');
-          if (respSize) {
-            const val = parseInt(String(respSize), 10);
-            if (!isNaN(val)) {
-              resHist.record(val, attributes);
-            }
+        const reqSize = request.headers['content-length'];
+        if (reqSize) {
+          const val = parseInt(String(reqSize), 10);
+          if (!isNaN(val)) {
+            reqHist.record(val, attributes);
           }
-
-          const reqSize = request.headers['content-length'];
-          if (reqSize) {
-            const val = parseInt(String(reqSize), 10);
-            if (!isNaN(val)) {
-              reqHist.record(val, attributes);
-            }
-          }
-        },
-      })
-    );
+        }
+      },
+    };
   }
 
-  if (isBuiltInEnabled('express', options.config)) {
-    builtIn.push(new ExpressInstrumentation({}));
-  }
-
-  if (isBuiltInEnabled('fastify', options.config)) {
-    builtIn.push(new FastifyInstrumentation({}));
-  }
-
-  if (isBuiltInEnabled('graphql', options.config)) {
-    builtIn.push(
-      new GraphQLInstrumentation({
-        mergeItems: true,
-        allowValues: false,
-      })
-    );
-  }
-
-  const discovered = resolveInstrumentations({
-    ...(options.config ? { config: options.config } : {}),
-    privacy: options.privacy,
-  });
-
-  return [...builtIn, ...discovered];
+  return getNodeAutoInstrumentations(autoConfig);
 }
 
-function isBuiltInEnabled(name: 'http' | 'express' | 'fastify' | 'graphql', config?: InstrumentationsConfig): boolean {
-  return resolveEnabled(
-    config?.[name]?.enabled,
-    INSTRUMENTATION_ENV_KEYS[name],
-    INSTRUMENTATION_DEFAULTS[name]
-  );
-}
