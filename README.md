@@ -41,24 +41,30 @@ import { initObservability } from 'elven-opentelemetry-instrumentation-js';
 
 const observability = await initObservability({
   runtime: 'node',
+  autoShutdown: true,
   service: {
     serviceName: 'my-payment-service',
     serviceVersion: '1.0.0',
     deploymentEnvironment: 'production',
   },
   exporters: {
-    protocol: 'grpc', // or 'http/protobuf'
+    protocol: 'http/protobuf', // or 'grpc'
+    url: 'https://otel.example.com/otlp', // base URL; signal paths are appended
+    // tracesUrl and metricsUrl can override exact gateway routes per signal.
     compression: 'gzip',
   },
   tracing: {
     enabled: true,
     sampling: {
-      ratio: 1.0,
+      ratio: 0.1,
     },
   },
   metrics: {
     enabled: true,
     exportIntervalMillis: 60000,
+    exportTimeoutMillis: 10000,
+    cardinalityLimit: 500,
+    maxExportBatchSize: 512,
   },
   privacy: {
     redactDbStatement: true,
@@ -103,6 +109,34 @@ Examples:
 - `OTEL_TRACES_EXPORTER=none` disables traces by default
 - `tracing.enabled: true` overrides that default
 - `OTEL_INSTR_PG=false` disables PG instrumentation unless explicitly enabled in config
+
+Standard sampling variables are supported: `OTEL_TRACES_SAMPLER` and
+`OTEL_TRACES_SAMPLER_ARG`. `OTEL_TRACES_SAMPLING_RATIO` remains available as a
+convenience fallback. When none is configured, the package uses a 10% ratio.
+
+## OTLP endpoints
+
+For `http/protobuf`, a base endpoint appends `/v1/traces` and `/v1/metrics`:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.com/otlp
+```
+
+Gateways with custom routes should use exact signal-specific endpoints:
+
+```bash
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://otel.example.com/custom/traces
+OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://otel.example.com/custom/metrics
+```
+
+The default trace queue is 512 spans with batches of 128. Metrics default to a
+60 second interval, 10 second timeout, 500-cardinality limit per instrument,
+and export batches of 512. Standard OpenTelemetry batch processor environment
+variables can override the trace limits.
+
+The Node SDK log exporter is explicitly disabled in this package. Logs are
+correlated with traces, but their shipping remains the responsibility of the
+Elven logs interceptor.
 
 ## Auto-discovered instrumentations
 

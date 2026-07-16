@@ -7,11 +7,15 @@ import { InstrumentationsConfig } from './config';
 import { getAutoInstrumentationsConfig } from './registry';
 
 export interface BuildInstrumentationsOptions {
-  config?: InstrumentationsConfig;
+  config?: InstrumentationsConfig | boolean;
   privacy: ResolvedPrivacyConfig;
 }
 
 export function getCoreInstrumentations(options: BuildInstrumentationsOptions): Instrumentation[] {
+  if (options.config === false) {
+    return [];
+  }
+
   let meter: Meter | undefined;
   let requestSizeHistogram: Histogram | undefined;
   let responseSizeHistogram: Histogram | undefined;
@@ -31,7 +35,10 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
     return { requestSizeHistogram, responseSizeHistogram };
   };
 
-  const autoConfig = getAutoInstrumentationsConfig(options);
+  const autoConfig = getAutoInstrumentationsConfig({
+    ...(typeof options.config === 'object' ? { config: options.config } : {}),
+    privacy: options.privacy,
+  });
 
   // Apply our custom HTTP hooks on top of whatever config was resolved
   const httpConfig = (autoConfig['@opentelemetry/instrumentation-http'] as Record<string, unknown>) || {};
@@ -78,6 +85,7 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
     };
   }
 
-  return getNodeAutoInstrumentations(autoConfig);
+  return getNodeAutoInstrumentations(autoConfig).filter(
+    (instrumentation) => instrumentation.getConfig().enabled !== false
+  );
 }
-

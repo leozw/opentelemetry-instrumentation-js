@@ -3,6 +3,7 @@ import { PeriodicExportingMetricReader, PushMetricExporter } from '@opentelemetr
 import {
   AlwaysOffSampler,
   BatchSpanProcessor,
+  BufferConfig as SpanBufferConfig,
   ConsoleSpanExporter,
   Sampler,
   SpanExporter,
@@ -29,6 +30,7 @@ let shutdownPromise: Promise<void> | null = null;
 let runtimeInstance: NodeRuntime | null = null;
 let activeHandle: ObservabilityHandle | null = null;
 let gracefulShutdownHookRegistered = false;
+let unregisterInstrumentations: (() => void) | null = null;
 
 export async function initObservability(config: ObservabilityConfig): Promise<ObservabilityHandle> {
   if (lifecycleState === 'starting' && startupPromise) {
@@ -59,7 +61,18 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     const resolvedPrivacy = resolvePrivacyConfig(config);
     const tracingEnabled = resolveTracingEnabled(config);
     const metricsEnabled = resolveMetricsEnabled(config);
-    const autoShutdownEnabled = resolveBooleanEnv(process.env.OTEL_AUTO_SHUTDOWN) ?? true;
+    const autoShutdownEnabled = config.autoShutdown
+      ?? resolveBooleanEnv(process.env.OTEL_AUTO_SHUTDOWN)
+      ?? true;
+
+    if (!tracingEnabled && !metricsEnabled) {
+      tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion);
+      metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion);
+      activeHandle = createHandle();
+      lifecycleState = 'started';
+      startupPromise = null;
+      return activeHandle;
+    }
 
     const resource = new ResourceBuilder(config.service).detect();
     const sampler = createSampler(config, tracingEnabled);
@@ -68,29 +81,39 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     const spanProcessors: SpanProcessor[] = [];
     const traceExporter = createTraceExporter(config, tracingEnabled, resolvedPrivacy);
     if (traceExporter) {
-      spanProcessors.push(new BatchSpanProcessor(traceExporter));
+      spanProcessors.push(
+        new BatchSpanProcessor(traceExporter, resolveSpanProcessorConfig())
+      );
     }
 
     const metricReaders: PeriodicExportingMetricReader[] = [];
     const metricExporter = createMetricExporter(config, metricsEnabled);
     if (metricExporter) {
+      const exportIntervalMillis = resolveMetricInterval(config);
       metricReaders.push(
         new PeriodicExportingMetricReader({
           exporter: metricExporter,
-          exportIntervalMillis: resolveMetricInterval(config),
+          exportIntervalMillis,
+          exportTimeoutMillis: resolveMetricTimeout(config, exportIntervalMillis),
+          cardinalityLimits: {
+            default: resolveMetricCardinalityLimit(config),
+          },
+          maxExportBatchSize: resolveMetricBatchSize(config),
         })
       );
     }
 
     const instrumentations = tracingEnabled || metricsEnabled
       ? getCoreInstrumentations({
-        ...(config.instrumentations ? { config: config.instrumentations } : {}),
+        ...(config.instrumentations !== undefined
+          ? { config: config.instrumentations }
+          : {}),
         privacy: resolvedPrivacy,
       })
       : [];
 
     if (instrumentations.length > 0) {
-      registerInstrumentations({
+      unregisterInstrumentations = registerInstrumentations({
         instrumentations,
       });
     }
@@ -133,13 +156,7 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion);
     metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion);
 
-    activeHandle = {
-      tracer,
-      metrics,
-      shutdown: shutdownObservability,
-      forceFlush: forceFlushObservability,
-      isStarted: () => lifecycleState === 'started' && runtimeInstance?.isStarted() === true,
-    };
+    activeHandle = createHandle();
 
     lifecycleState = 'started';
     startupPromise = null;
@@ -150,6 +167,8 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
 
     return activeHandle;
   } catch (error) {
+    unregisterInstrumentations?.();
+    unregisterInstrumentations = null;
     startupPromise = null;
     runtimeInstance = null;
     activeHandle = null;
@@ -171,6 +190,8 @@ async function shutdownObservability(): Promise<void> {
       await forceFlushObservability();
       await runtimeInstance?.shutdown();
     } finally {
+      unregisterInstrumentations?.();
+      unregisterInstrumentations = null;
       runtimeInstance = null;
       activeHandle = null;
       startupPromise = null;
@@ -183,7 +204,7 @@ async function shutdownObservability(): Promise<void> {
 }
 
 async function forceFlushObservability(): Promise<void> {
-  if (!runtimeInstance || lifecycleState !== 'started') return;
+  if (!runtimeInstance || lifecycleState === 'idle') return;
   await runtimeInstance.forceFlush();
 }
 
@@ -222,7 +243,68 @@ function createSampler(config: ObservabilityConfig, tracingEnabled: boolean): Sa
   if (!tracingEnabled) {
     return new AlwaysOffSampler();
   }
-  return createSmartSampler(config.tracing?.sampling || {});
+  return createSmartSampler(resolveSamplingConfig(config));
+}
+
+function createHandle(): ObservabilityHandle {
+  return {
+    tracer,
+    metrics,
+    shutdown: shutdownObservability,
+    forceFlush: forceFlushObservability,
+    isStarted: () => lifecycleState === 'started' && (
+      runtimeInstance === null || runtimeInstance.isStarted()
+    ),
+  };
+}
+
+function resolveSpanProcessorConfig(): SpanBufferConfig {
+  const maxQueueSize = resolvePositiveInt(process.env.OTEL_BSP_MAX_QUEUE_SIZE, 512, 1, 65_536);
+  return {
+    maxQueueSize,
+    maxExportBatchSize: Math.min(
+      maxQueueSize,
+      resolvePositiveInt(process.env.OTEL_BSP_MAX_EXPORT_BATCH_SIZE, 128, 1, 65_536)
+    ),
+    scheduledDelayMillis: resolvePositiveInt(
+      process.env.OTEL_BSP_SCHEDULE_DELAY,
+      5_000,
+      1,
+      300_000
+    ),
+    exportTimeoutMillis: resolvePositiveInt(
+      process.env.OTEL_BSP_EXPORT_TIMEOUT,
+      10_000,
+      1,
+      300_000
+    ),
+  };
+}
+
+function resolveSamplingConfig(config: ObservabilityConfig) {
+  const configured = config.tracing?.sampling || {};
+  if (typeof configured.ratio === 'number') {
+    return configured;
+  }
+
+  const standardSampler = process.env.OTEL_TRACES_SAMPLER?.trim().toLowerCase();
+  if (standardSampler === 'always_off' || standardSampler === 'parentbased_always_off') {
+    return { ...configured, ratio: 0 };
+  }
+  if (standardSampler === 'always_on' || standardSampler === 'parentbased_always_on') {
+    return { ...configured, ratio: 1 };
+  }
+
+  const rawRatio =
+    process.env.OTEL_TRACES_SAMPLING_RATIO ||
+    process.env.OTEL_SAMPLING_RATIO ||
+    process.env.OTEL_TRACES_SAMPLER_ARG;
+  const parsedRatio = rawRatio === undefined ? undefined : Number.parseFloat(rawRatio);
+  if (parsedRatio !== undefined && Number.isFinite(parsedRatio)) {
+    return { ...configured, ratio: Math.max(0, Math.min(1, parsedRatio)) };
+  }
+
+  return { ...configured, ratio: 0.1 };
 }
 
 function resolveMetricInterval(config: ObservabilityConfig): number {
@@ -234,6 +316,45 @@ function resolveMetricInterval(config: ObservabilityConfig): number {
 
   const parsed = parseInt(envInterval, 10);
   if (isNaN(parsed) || parsed <= 0) return 60000;
+  return parsed;
+}
+
+function resolveMetricTimeout(config: ObservabilityConfig, intervalMillis: number): number {
+  const configured = config.metrics?.exportTimeoutMillis;
+  const timeout = configured && configured > 0
+    ? configured
+    : resolvePositiveInt(process.env.OTEL_METRIC_EXPORT_TIMEOUT, 10_000, 1, 300_000);
+  return Math.min(timeout, Math.max(1, intervalMillis - 1));
+}
+
+function resolveMetricCardinalityLimit(config: ObservabilityConfig): number {
+  const configured = config.metrics?.cardinalityLimit;
+  if (configured && configured > 1) return Math.floor(configured);
+  return resolvePositiveInt(
+    process.env.OTEL_METRICS_CARDINALITY_LIMIT || process.env.OTEL_METRIC_CARDINALITY_LIMIT,
+    500,
+    2,
+    100_000
+  );
+}
+
+function resolveMetricBatchSize(config: ObservabilityConfig): number {
+  const configured = config.metrics?.maxExportBatchSize;
+  if (configured && configured > 0) return Math.floor(configured);
+  return resolvePositiveInt(process.env.OTEL_METRIC_EXPORT_BATCH_SIZE, 512, 1, 100_000);
+}
+
+function resolvePositiveInt(
+  rawValue: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  if (rawValue === undefined) return fallback;
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+    return fallback;
+  }
   return parsed;
 }
 
@@ -303,4 +424,3 @@ function registerGracefulShutdownHook(): void {
 
 export { MetricFacade } from '../core/metrics';
 export { TracerFacade } from '../core/tracing';
-

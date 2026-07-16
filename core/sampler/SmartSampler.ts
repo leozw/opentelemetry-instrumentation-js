@@ -31,7 +31,11 @@ export class SmartSampler implements Sampler {
   private _rules: SamplingRule[];
 
   constructor(config: SmartSamplerConfig = {}) {
-    this._ratioSampler = new TraceIdRatioBasedSampler(config.ratio ?? 1.0);
+    const configuredRatio = config.ratio ?? 1.0;
+    const ratio = Number.isFinite(configuredRatio)
+      ? Math.max(0, Math.min(1, configuredRatio))
+      : 1.0;
+    this._ratioSampler = new TraceIdRatioBasedSampler(ratio);
     this._rules = config.rules ?? [];
   }
 

@@ -79,25 +79,7 @@ test('supports tracing and metrics disable flags', { concurrency: 1 }, async () 
     ...baseConfig,
     tracing: { enabled: false },
     metrics: { enabled: false },
-    instrumentations: {
-      http: { enabled: false },
-      express: { enabled: false },
-      fastify: { enabled: false },
-      graphql: { enabled: false },
-      pg: { enabled: false },
-      mysql: { enabled: false },
-      mongodb: { enabled: false },
-      mongoose: { enabled: false },
-      redis: { enabled: false },
-      knex: { enabled: false },
-      genericPool: { enabled: false },
-      nestjs: { enabled: false },
-      koa: { enabled: false },
-      dns: { enabled: false },
-      net: { enabled: false },
-      pino: { enabled: false },
-      winston: { enabled: false },
-    },
+    instrumentations: false,
   });
 
   assert.equal(handle.isStarted(), true);
@@ -120,7 +102,10 @@ test('redacts db statement and hashes user id by default', { concurrency: 1 }, a
   };
 
   try {
-    const handle = await initObservability(baseConfig);
+    const handle = await initObservability({
+      ...baseConfig,
+      tracing: { enabled: true, sampling: { ratio: 1 } },
+    });
     await handle.tracer.withSpan('privacy-test', async (span) => {
       span.setAttribute('db.statement', 'SELECT * FROM users WHERE email = "sensitive@example.com"');
       span.setAttribute('user.id', 'user-sensitive-id-xyz-999');

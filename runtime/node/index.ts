@@ -28,6 +28,9 @@ export class NodeRuntime {
 
     this._sdk = new NodeSDK({
       resource: config.resource,
+      // This package correlates logs but does not own a log export pipeline.
+      // An explicit empty list prevents NodeSDK from creating its default OTLP logger.
+      logRecordProcessors: [],
       resourceDetectors: config.resourceDetectors ?? [],
       autoDetectResources: false,
       // Spread optional properties to avoid passing undefined

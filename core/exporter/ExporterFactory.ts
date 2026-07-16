@@ -13,7 +13,12 @@ export class ExporterFactory {
       headers: config.headers,
       compression: compression,
     };
-    if (config.url) exportConfig.url = config.url;
+    const url = config.tracesUrl ?? (
+      config.url && protocol === 'http/protobuf'
+        ? appendSignalPath(config.url, 'v1/traces')
+        : config.url
+    );
+    if (url) exportConfig.url = url;
 
     if (protocol === 'grpc') {
       return new OTLPGrpcTraceExporter(exportConfig);
@@ -29,7 +34,12 @@ export class ExporterFactory {
       headers: config.headers,
       compression: compression,
     };
-    if (config.url) exportConfig.url = config.url;
+    const url = config.metricsUrl ?? (
+      config.url && protocol === 'http/protobuf'
+        ? appendSignalPath(config.url, 'v1/metrics')
+        : config.url
+    );
+    if (url) exportConfig.url = url;
 
     if (protocol === 'grpc') {
       return new OTLPGrpcMetricExporter(exportConfig);
@@ -50,7 +60,21 @@ export type Compression = 'gzip' | 'none';
 
 export interface ExporterConfig {
   protocol?: Protocol;
+  /** Base OTLP URL. HTTP exporters append /v1/traces or /v1/metrics. */
   url?: string;
+  /** Exact signal endpoint; takes precedence over url. */
+  tracesUrl?: string;
+  /** Exact signal endpoint; takes precedence over url. */
+  metricsUrl?: string;
   headers?: Record<string, string>;
   compression?: Compression;
+}
+
+function appendSignalPath(baseUrl: string, signalPath: 'v1/traces' | 'v1/metrics'): string {
+  const url = new URL(baseUrl);
+  const basePath = url.pathname
+    .replace(/\/+$/, '')
+    .replace(/\/v1\/(traces|metrics)$/, '');
+  url.pathname = `${basePath}/${signalPath}`.replace(/\/+/g, '/');
+  return url.toString();
 }

@@ -13,6 +13,9 @@ export interface TracingConfig {
 export interface MetricsConfig {
   enabled?: boolean;
   exportIntervalMillis?: number;
+  exportTimeoutMillis?: number;
+  cardinalityLimit?: number;
+  maxExportBatchSize?: number;
 }
 
 export interface PrivacyConfig {
@@ -22,6 +25,9 @@ export interface PrivacyConfig {
 }
 
 export interface ObservabilityConfig {
+  /** Register process signal handlers for automatic flush and shutdown. */
+  autoShutdown?: boolean;
+
   /**
    * Service identification and resource attributes.
    */
@@ -52,7 +58,7 @@ export interface ObservabilityConfig {
   /**
    * Instrumentation toggles.
    */
-  instrumentations?: InstrumentationsConfig;
+  instrumentations?: InstrumentationsConfig | boolean;
 
   /**
    * Privacy defaults for attribute sanitization.
