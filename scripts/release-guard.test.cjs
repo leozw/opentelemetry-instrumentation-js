@@ -11,6 +11,7 @@ const yaml = require('node:fs').readFileSync(require('node:path').join(__dirname
 assert.match(yaml, /workflow_dispatch:/);
 assert.doesNotMatch(yaml, /\n {2}(push|pull_request|release|schedule|workflow_run):/);
 assert.equal((yaml.match(/NODE_AUTH_TOKEN:/g) || []).length, 1);
-assert.match(yaml, /npm publish release\/package.tgz --ignore-scripts --provenance --access public/);
+assert.match(yaml, /npm publish \.\/release\/package\.tgz --ignore-scripts --provenance --access public/);
+assert.doesNotMatch(yaml, /npm publish release\/package\.tgz/);
 assert.doesNotMatch(yaml, /provenance[=: ]+false|self-hosted/);
 console.log('Release negative/positive policy checks passed; no publication attempted');

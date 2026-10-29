@@ -85,6 +85,6 @@ jobs:
       - name: Publish exact validated archive with mandatory provenance
         run: |
           test -n "$NODE_AUTH_TOKEN" || { echo "NPM_TOKEN is not configured"; exit 1; }
-          npm publish release/package.tgz --ignore-scripts --provenance --access public --registry https://registry.npmjs.org/
+          npm publish ./release/package.tgz --ignore-scripts --provenance --access public --registry https://registry.npmjs.org/
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
