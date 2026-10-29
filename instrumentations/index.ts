@@ -62,8 +62,11 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
     };
   }
 
-  return getNodeAutoInstrumentations(autoConfig).filter(
-    (instrumentation) => Object.hasOwn(autoConfig, instrumentation.instrumentationName)
-      && instrumentation.getConfig().enabled !== false
-  );
+  return getNodeAutoInstrumentations(autoConfig).filter(instrumentation => {
+    const included = Object.hasOwn(autoConfig, instrumentation.instrumentationName)
+      && instrumentation.getConfig().enabled !== false;
+    // Constructors can enable hooks before the SDK registers the selected set.
+    if (!included) instrumentation.disable();
+    return included;
+  });
 }

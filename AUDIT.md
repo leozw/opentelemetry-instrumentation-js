@@ -22,7 +22,7 @@ was performed. The npm package identity and the 1.0.8 public API are retained.
 
 ## Verification
 
-Twenty-two native Node tests, lint, typecheck and build passed. Clean packed CJS,
+Twenty-three native Node tests, lint, typecheck and build passed. Clean packed CJS,
 ESM and preload consumers exported actual OTLP protobuf on Node 18/20/22/24/26.
 A strict packed TypeScript consumer accepts `failOpen: false`, the public handle,
 and both facades without casts. The clean production graph has zero npm
@@ -57,6 +57,19 @@ production graph and an archive receipt. NPM_TOKEN appears only in the publish
 step. The workflow has not been dispatched, and the performance gate remains a
 publication blocker. Original and corrected harness receipts plus CPU profiles
 are retained by hosted CI, including when the gate fails.
+
+Hosted run 40930484098 on ba55622 reproduced the failure on Node 22/24/26:
+original harness candidate p99 deltas were 266.67%, 233.33%, 300%; revised
+collector-isolated harness deltas were 233.33%, 200%, 266.67%. Published 1.0.8
+also failed both harnesses. Quantization/order/collector coupling are real
+measurement limitations, but do not explain away the remaining cost. Against
+the immutable audited reference, observed candidate throughput improved
+10.90%, 9.52%, 2.92% and CPU/request decreased 13.21%, 10.45%, 3.87% in that
+run. These are observations on shared hosted runners, not universal guarantees.
+
+A follow-up test also prevents unselected upstream instrumentation instances
+from retaining constructor-enabled hooks after they are filtered out. Selected
+HTTP/database/framework coverage and privacy remain enabled as configured.
 
 Primary references:
 - https://github.com/open-telemetry/opentelemetry-js/releases/tag/v2.12.0

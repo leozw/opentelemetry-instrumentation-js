@@ -61,3 +61,15 @@ test('HTTP body histograms remain lazy and record valid content lengths includin
   assert.deepEqual(records.map(r => r.value), [42, 0]);
   assert.deepEqual(records[0].attrs, { 'http.request.method': 'POST', 'http.response.status_code': 201 });
 });
+
+test('unselected upstream instrumentations cannot leave constructor-enabled hooks active', () => {
+  let disabled=0;
+  const selected={instrumentationName:'@opentelemetry/instrumentation-http',getConfig:()=>({enabled:true}),disable:()=>assert.fail('selected HTTP disabled')};
+  const unknown={instrumentationName:'@opentelemetry/instrumentation-unselected',getConfig:()=>({enabled:true}),disable:()=>{disabled++;}};
+  const {getCoreInstrumentations}=source('instrumentations/index.ts',{
+    '@opentelemetry/auto-instrumentations-node':{getNodeAutoInstrumentations:()=>[selected,unknown]},
+    './registry':{getAutoInstrumentationsConfig:()=>({'@opentelemetry/instrumentation-http':{enabled:true}})},
+  });
+  assert.deepEqual(getCoreInstrumentations({privacy:{}}),[selected]);
+  assert.equal(disabled,1);
+});
