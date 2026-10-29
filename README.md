@@ -220,3 +220,26 @@ Set `BENCHMARK_PRELOAD_PATH` to compare another built/published package using
 the same active-export harness.
 Autocannon exposes p99, not p95; the harness uses p99 and only falls back to
 throughput when latency is unavailable. Missing process samples remain UNKNOWN.
+
+## Maintainer Release Gates
+
+The manual `.github/workflows/release.yml` accepts only `main`, an exact current
+SHA, stable version and typed package confirmation. It requires successful
+Node 22/24/26 main-push CI for that SHA, a public matching repository, a clean
+production audit and the validated archive hash. Only the final hosted publish
+job receives `NPM_TOKEN`; `id-token: write` and `--provenance` remain mandatory.
+There are no push/tag publication triggers and no provenance fallback.
+
+An authorized maintainer must configure `NPM_TOKEN` in this package's matching
+GitHub repository before dispatch. No token was read, created or changed by the
+audit, and trusted-publisher configuration is not assumed. A coordinator token
+in another repository does not establish this package's provenance. This
+workflow was prepared, not dispatched. See the [npm provenance requirements](https://docs.npmjs.com/generating-provenance-statements/).
+
+Development builds use tsup 9 / esbuild 0.28.2 and require Node 22.18+, 24.11+
+or 26+. This is a development-tool requirement, not a raised package runtime
+floor; emitted code still targets Node 18.19. Performance qualification retains
+the existing 3% gate. CI preserves published 1.0.8, the immutable audited
+reference and the candidate, with original-harness results and separate-process
+collector/CPU receipts. Quantized p99 and shared-host samples are not universal
+overhead guarantees.

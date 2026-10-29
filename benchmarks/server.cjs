@@ -20,3 +20,6 @@ const shutdown = () => {
 
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
+process.on('message', message => {
+  if (message === 'stats') process.send({ usage: process.resourceUsage(), memory: process.memoryUsage() });
+});

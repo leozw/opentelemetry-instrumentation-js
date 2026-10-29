@@ -8,11 +8,16 @@ export class SpanPayloadLimitProcessor implements SpanProcessor {
   onEnd(span: ReadableSpan): void {
     let bytes = span.name.length * 2 + (span.status.message?.length ?? 0) * 2;
     const count = (attributes: Attributes) => {
-      for (const [key, value] of Object.entries(attributes)) {
+      for (const key in attributes) {
+        if (!Object.hasOwn(attributes, key)) continue;
+        const value = attributes[key];
         bytes += key.length * 2 + 32;
-        const values = Array.isArray(value) ? value : [value];
-        if (values.length > 64) { bytes = 65_537; return; }
-        for (const item of values) bytes += typeof item === 'string' ? item.length * 2 : 16;
+        if (Array.isArray(value)) {
+          if (value.length > 64) { bytes = 65_537; return; }
+          for (const item of value) bytes += typeof item === 'string' ? item.length * 2 : 16;
+        } else {
+          bytes += typeof value === 'string' ? value.length * 2 : 16;
+        }
         if (bytes > 65_536) return;
       }
     };

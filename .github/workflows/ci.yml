@@ -10,6 +10,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -17,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -30,11 +33,41 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Release policy regression tests
+        run: node scripts/release-guard.test.cjs
+
       - name: Typecheck
         run: npm run typecheck
 
       - name: Unit and integration tests
         run: npm test
 
+      - name: Prepare immutable benchmark baselines
+        id: baselines
+        run: node benchmarks/prepare-baselines.cjs
+
       - name: Benchmark budget
         run: npm run benchmark:ci
+        env:
+          BENCHMARK_COMPARE_BASELINES: 'true'
+
+      - name: Capture diagnostic CPU profiles
+        if: ${{ !cancelled() && steps.baselines.outcome == 'success' }}
+        run: node benchmarks/run-benchmark.cjs
+        env:
+          BENCHMARK_COMPARE_BASELINES: 'true'
+          BENCHMARK_PROFILE_DIR: .benchmark-results/profiles
+
+      - name: Compare original hosted harness without changing its gate
+        if: ${{ !cancelled() && steps.baselines.outcome == 'success' }}
+        run: node benchmarks/original-comparison.cjs
+
+      - name: Preserve benchmark evidence even on gate failure
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: benchmark-node-${{ matrix.node-version }}
+          include-hidden-files: true
+          path: |
+            .benchmark-results/*.json
+            .benchmark-results/profiles/*.cpuprofile

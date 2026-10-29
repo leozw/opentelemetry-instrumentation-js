@@ -13,6 +13,7 @@ const REDACTED = '[REDACTED]';
 const DB_STATEMENT_KEYS = new Set<string>(['db.statement', 'db.query.text']);
 const USER_ID_KEYS = new Set<string>(['user.id', 'enduser.id']);
 const SECRET_KEYS = new Set(['db.user', 'db.user.name', 'http.request.header.authorization', 'http.request.header.cookie', 'http.response.header.set_cookie']);
+const URL_KEYS = new Set(['url.full', 'http.url', 'http.target']);
 
 export class RedactingSpanExporter implements SpanExporter {
   private _allowRawAttributesSet: Set<string>;
@@ -28,11 +29,22 @@ export class RedactingSpanExporter implements SpanExporter {
     spans: ReadableSpan[],
     resultCallback: (result: { code: number; error?: Error }) => void
   ): void {
-    const sanitized = spans.map(span => Object.create(span, {
-      attributes: { value: this.sanitizeAttributes(span.attributes) },
-      events: { value: span.events.map(event => ({ ...event, attributes: this.sanitizeAttributes(event.attributes ?? {}) })) },
-      links: { value: span.links.map(link => ({ ...link, attributes: this.sanitizeAttributes(link.attributes ?? {}) })) },
-    }) as ReadableSpan);
+    const sanitized = spans.map(span => {
+      const attributes = this.sanitizeAttributes(span.attributes);
+      const events = span.events.map(event => {
+        const attributes = event.attributes && this.sanitizeAttributes(event.attributes);
+        return attributes === event.attributes ? event : { ...event, attributes };
+      });
+      const links = span.links.map(link => {
+        const attributes = link.attributes && this.sanitizeAttributes(link.attributes);
+        return attributes === link.attributes ? link : { ...link, attributes };
+      });
+      if (attributes === span.attributes && events.every((event, i) => event === span.events[i])
+        && links.every((link, i) => link === span.links[i])) return span;
+      return Object.create(span, {
+        attributes: { value: attributes }, events: { value: events }, links: { value: links },
+      }) as ReadableSpan;
+    });
     this.delegate.export(sanitized, resultCallback);
   }
 
@@ -47,23 +59,19 @@ export class RedactingSpanExporter implements SpanExporter {
   }
 
   private sanitizeAttributes(source: Attributes): Attributes {
-    const attributes = { ...source };
-    for (const [key, value] of Object.entries(attributes)) {
+    let attributes = source;
+    for (const key in source) {
+      if (!Object.hasOwn(source, key)) continue;
+      const value = source[key];
       if (this._allowRawAttributesSet.has(key)) continue;
-      if (SECRET_KEYS.has(key)) { attributes[key] = REDACTED; continue; }
-      if (key === 'url.query') { attributes[key] = REDACTED; continue; }
-      if (['url.full', 'http.url', 'http.target'].includes(key) && typeof value === 'string') {
-        attributes[key] = redactUrl(value);
-        continue;
-      }
-
-      if (this.privacy.redactDbStatement && DB_STATEMENT_KEYS.has(key)) {
-        attributes[key] = REDACTED;
-        continue;
-      }
-
-      if (this.privacy.hashUserId && USER_ID_KEYS.has(key)) {
-        attributes[key] = hashValue(value);
+      let sanitized = value;
+      if (SECRET_KEYS.has(key) || key === 'url.query'
+        || (this.privacy.redactDbStatement && DB_STATEMENT_KEYS.has(key))) sanitized = REDACTED;
+      else if (URL_KEYS.has(key) && typeof value === 'string') sanitized = redactUrl(value);
+      else if (this.privacy.hashUserId && USER_ID_KEYS.has(key)) sanitized = hashValue(value);
+      if (sanitized !== value) {
+        if (attributes === source) attributes = { ...source };
+        attributes[key] = sanitized;
       }
     }
     return attributes;

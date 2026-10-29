@@ -22,7 +22,7 @@ was performed. The npm package identity and the 1.0.8 public API are retained.
 
 ## Verification
 
-Seventeen native Node tests, lint, typecheck and build passed. Clean packed CJS,
+Twenty-two native Node tests, lint, typecheck and build passed. Clean packed CJS,
 ESM and preload consumers exported actual OTLP protobuf on Node 18/20/22/24/26.
 A strict packed TypeScript consumer accepts `failOpen: false`, the public handle,
 and both facades without casts. The clean production graph has zero npm
@@ -38,15 +38,25 @@ also showed substantial cost in this deliberately minimal HTTP profile, so this
 does not establish a patch regression or universal overhead. Performance release
 acceptance needs an isolated, representative workload and explicit review.
 
-Development npm audit still flags esbuild and uuid through the benchmark
-toolchain. The Windows esbuild dev server and uuid v3/v5/v6 buffer APIs are not
-used by this build/benchmark path, but the findings are not called scanner-green.
+The development build now uses tsup 9 / esbuild 0.28.2 to remediate the esbuild
+advisory; builds require maintained Node 22.18+, 24.11+ or 26+, while emitted
+package code still targets Node 18.19. Development npm audit still flags uuid
+through autocannon/hyperid. Their declared ranges have no compatible fix;
+uuid v3/v5/v6 buffer APIs are not used by this benchmark. No force override or
+autocannon downgrade was accepted, and development is not called scanner-green.
 gRPC, real database drivers, long soak, Windows/Linux native packaging and a
 full in-process SDK restart after shutdown remain unqualified.
 
 Full private evidence is in the coordinating audit's `evidence/node/report.json`
 and `report.md`, with exact artifacts, hashes, source lines, advisories and gaps.
 The published registry identities have not been changed.
+
+Manual release/provenance policy is tested separately. The main-only workflow
+requires exact-SHA successful main CI, public repository metadata, a clean
+production graph and an archive receipt. NPM_TOKEN appears only in the publish
+step. The workflow has not been dispatched, and the performance gate remains a
+publication blocker. Original and corrected harness receipts plus CPU profiles
+are retained by hosted CI, including when the gate fails.
 
 Primary references:
 - https://github.com/open-telemetry/opentelemetry-js/releases/tag/v2.12.0
