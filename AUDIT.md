@@ -22,7 +22,7 @@ was performed. The npm package identity and the 1.0.8 public API are retained.
 
 ## Verification
 
-Thirty-six native Node tests, lint, typecheck and build passed. Clean packed CJS,
+Fifty-five native Node tests, lint, typecheck and build passed. Clean packed CJS,
 ESM and preload consumers exported actual OTLP protobuf on Node 18/20/22/24/26.
 A strict packed TypeScript consumer accepts `failOpen: false`, the public handle,
 and both facades without casts. The clean production graph has zero npm
@@ -130,3 +130,17 @@ An explicit URL does not clear unrelated ambient credentials. This SDK does
 not mutate shared environment variables or claim independent-destination
 credential ownership; a wrapper selecting that policy must guard it explicitly.
 The strict 3% performance gate remains unchanged and blocks release.
+
+PARENT-SDK09 independently identified a regression in the restart ownership
+check: upstream intentionally registers no providers with OTEL_SDK_DISABLED,
+but strict startup treated that as a collision. The public initializer now uses
+upstream getBooleanFromEnv before active pipeline construction. Intentional
+disable returns an initialized no-op handle for strict, fail-open and default
+callers; its facades do not borrow foreign providers. Required registration
+checks remain unchanged for active startup. Direct, CJS/ESM, mixed-case/trimmed
+true, false/non-true conflict controls and zero-code preload are covered.
+
+Performance qualification remains on HOLD. The full active benchmark receipts
+apply to 6fe67ef / archive87afd7ef, not this disable-only successor. Functional
+CI and archived consumers are rerun for the new source; no benchmark result is
+transferred as a fresh pass and the source 3% gate is not changed or waived.

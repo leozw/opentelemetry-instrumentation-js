@@ -116,6 +116,14 @@ Startup failures reject by default (`failOpen: false`), including invalid export
 configuration. `failOpen: true` returns a no-op handle with `isStarted() === false`;
 it is not a successful component startup. Later network/export failures remain
 asynchronous and are not startup failure proof. Existing 1.0.8 API names remain.
+`OTEL_SDK_DISABLED=true` is intentional no-op initialization, not a startup
+failure, including with `failOpen: false`. It uses the upstream parser (trimmed,
+case-insensitive `true`), constructs no active exporters/readers/hooks and does
+not use or alter foreign providers. The initialized disabled handle reports
+`isStarted() === true` until shutdown; that describes its lifecycle, not active
+export. Its no-op facades still execute business callbacks. Set the flag before
+initialization; changing environment variables does not stop an existing owner.
+See the [standard SDK disable setting](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#general-sdk-configuration).
 Preload skips Worker threads; initialize explicitly inside an application Worker
 when needed. Child and cluster processes initialize independently, inheriting
 `NODE_OPTIONS` and environment in the normal Node way. Internal log Workers do

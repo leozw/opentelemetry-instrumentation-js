@@ -1,5 +1,6 @@
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { createNoopMeter, ProxyTracerProvider } from '@opentelemetry/api';
+import { getBooleanFromEnv } from '@opentelemetry/core';
 import { PeriodicExportingMetricReader, PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import {
   AlwaysOffSampler,
@@ -98,22 +99,27 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
       );
     }
 
-    const resolvedPrivacy = resolvePrivacyConfig(config);
-    const tracingEnabled = resolveTracingEnabled(config);
-    const metricsEnabled = resolveMetricsEnabled(config);
-    const autoShutdownEnabled = config.autoShutdown
-      ?? resolveBooleanEnv(process.env.OTEL_AUTO_SHUTDOWN)
-      ?? true;
+    const sdkDisabled = getBooleanFromEnv('OTEL_SDK_DISABLED');
+    const tracingEnabled = !sdkDisabled && resolveTracingEnabled(config);
+    const metricsEnabled = !sdkDisabled && resolveMetricsEnabled(config);
 
     if (!tracingEnabled && !metricsEnabled) {
-      tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion);
-      metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion);
+      // Intentional global disable is successful no-op initialization, not a
+      // registration failure. Do not borrow another owner's active providers.
+      tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion,
+        sdkDisabled ? new ProxyTracerProvider().getTracer(config.service.serviceName) : undefined);
+      metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion,
+        sdkDisabled ? createNoopMeter() : undefined);
       activeHandle = createHandle();
       lifecycleState = 'started';
       startupPromise = null;
       return activeHandle;
     }
 
+    const resolvedPrivacy = resolvePrivacyConfig(config);
+    const autoShutdownEnabled = config.autoShutdown
+      ?? resolveBooleanEnv(process.env.OTEL_AUTO_SHUTDOWN)
+      ?? true;
     const resource = new ResourceBuilder(config.service).detect();
     const sampler = createSampler(config, tracingEnabled);
     const propagator = NetworkPropagator.create();
