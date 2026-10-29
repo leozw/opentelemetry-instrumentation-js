@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
 function source(file, mocks = {}) {
+  if (file === 'instrumentations/index.ts') {
+    delete globalThis[Symbol.for('elven.observability.node.instrumentations.v1')];
+    mocks['./config'] ??= source('instrumentations/config.ts');
+  }
   const exports = {};
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   new Function('require', 'exports', code)(name => mocks[name] || require(name), exports);
@@ -66,7 +70,10 @@ test('HTTP body histograms remain lazy and record valid content lengths includin
   const records = [];
   const { getCoreInstrumentations } = source('instrumentations/index.ts', {
     '@opentelemetry/api': { metrics: { getMeter: () => ({ createHistogram: name => { created++; return { record: (value, attrs) => records.push({ name, value, attrs }) }; } }) } },
-    '@opentelemetry/auto-instrumentations-node': { getNodeAutoInstrumentations: value => { config = value; return []; } },
+    '@opentelemetry/auto-instrumentations-node': { getNodeAutoInstrumentations: () => [{
+      instrumentationName: '@opentelemetry/instrumentation-http', getConfig: () => ({ enabled: true }),
+      setConfig: value => { config = { '@opentelemetry/instrumentation-http': value }; }, enable: () => {}, disable: () => {},
+    }] },
     './registry': { getAutoInstrumentationsConfig: () => ({ '@opentelemetry/instrumentation-http': { enabled: true } }) },
   });
   getCoreInstrumentations({ privacy: {} });
@@ -81,7 +88,7 @@ test('HTTP body histograms remain lazy and record valid content lengths includin
 
 test('unselected upstream instrumentations cannot leave constructor-enabled hooks active', () => {
   let disabled=0;
-  const selected={instrumentationName:'@opentelemetry/instrumentation-http',getConfig:()=>({enabled:true}),disable:()=>assert.fail('selected HTTP disabled')};
+  const selected={instrumentationName:'@opentelemetry/instrumentation-http',getConfig:()=>({enabled:true}),setConfig:()=>{},enable:()=>{},disable:()=>assert.fail('selected HTTP disabled')};
   const unknown={instrumentationName:'@opentelemetry/instrumentation-unselected',getConfig:()=>({enabled:true}),disable:()=>{disabled++;}};
   const {getCoreInstrumentations}=source('instrumentations/index.ts',{
     '@opentelemetry/auto-instrumentations-node':{getNodeAutoInstrumentations:()=>[selected,unknown]},
@@ -89,4 +96,17 @@ test('unselected upstream instrumentations cannot leave constructor-enabled hook
   });
   assert.deepEqual(getCoreInstrumentations({privacy:{}}),[selected]);
   assert.equal(disabled,1);
+});
+
+test('restart reuses bounded instrumentation instances and reapplies the new configuration', () => {
+  let constructions=0,enabled=0,disabled=0,current={enabled:true};
+  const http={instrumentationName:'@opentelemetry/instrumentation-http',getConfig:()=>current,setConfig:value=>{current=value;},enable:()=>{enabled++;},disable:()=>{disabled++;}};
+  const {getCoreInstrumentations}=source('instrumentations/index.ts',{
+    '@opentelemetry/auto-instrumentations-node':{getNodeAutoInstrumentations:()=>{constructions++;return[http];}},
+    './registry':{getAutoInstrumentationsConfig:options=>({'@opentelemetry/instrumentation-http':{enabled:options.config?.http?.enabled!==false}})},
+  });
+  const first=getCoreInstrumentations({privacy:{},config:{http:{enabled:true}}});
+  assert.deepEqual(getCoreInstrumentations({privacy:{},config:{http:{enabled:false}}}),[]);
+  const third=getCoreInstrumentations({privacy:{},config:{http:{enabled:true}}});
+  assert.equal(first[0],third[0]);assert.equal(constructions,1);assert.equal(disabled,1);assert.equal(enabled,2);
 });

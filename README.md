@@ -100,7 +100,7 @@ await observability.forceFlush();
 await observability.shutdown();
 ```
 
-## Public API (v2)
+## Public API (1.x)
 
 `initObservability(config)` returns an `ObservabilityHandle`:
 
@@ -122,6 +122,27 @@ when needed. Child and cluster processes initialize independently, inheriting
 not inherit preload options. Set `autoShutdown: false` when the application
 owns shutdown and await `shutdown()` there. Automatic signal shutdown has a
 10-second deadline and does not call `process.exit(0)` over application handlers.
+
+After an awaited shutdown, a new init creates a new generation and may select a
+new collector. Only still-current trace/metric providers registered by this SDK
+are unregistered; foreign/replacement providers are not shut down or removed.
+An occupied requested signal provider rejects startup (or returns an explicitly
+unstarted handle with `failOpen: true`). Use the new handle/facades; old generation
+tracers and instruments do not forward into a different collector. Instrumentation
+instances are retained in a bounded per-isolate pool so already-loaded HTTP
+modules can be repatched without accumulating require hooks.
+
+### Exporter Header Ownership
+
+Changing `exporters.url`, `tracesUrl` or `metricsUrl` does not create a credential
+boundary. Upstream JS OTLP exporters merge ambient `OTEL_EXPORTER_OTLP_HEADERS`
+and signal-specific header settings with programmatic `exporters.headers`;
+setting `{}` is not a reliable way to clear unrelated ambient keys. Configure
+collector URLs and headers as one trusted ownership boundary before startup.
+Wrappers choosing an independent destination must guard or isolate that
+configuration explicitly, not temporarily mutate shared `process.env`. This SDK
+does not clear global environment variables or claim multi-owner credential
+isolation. See [upstream OTLP configuration](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/).
 
 ## Feature precedence
 

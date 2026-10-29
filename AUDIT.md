@@ -22,7 +22,7 @@ was performed. The npm package identity and the 1.0.8 public API are retained.
 
 ## Verification
 
-Thirty-one native Node tests, lint, typecheck and build passed. Clean packed CJS,
+Thirty-six native Node tests, lint, typecheck and build passed. Clean packed CJS,
 ESM and preload consumers exported actual OTLP protobuf on Node 18/20/22/24/26.
 A strict packed TypeScript consumer accepts `failOpen: false`, the public handle,
 and both facades without casts. The clean production graph has zero npm
@@ -45,7 +45,7 @@ through autocannon/hyperid. Their declared ranges have no compatible fix;
 uuid v3/v5/v6 buffer APIs are not used by this benchmark. No force override or
 autocannon downgrade was accepted, and development is not called scanner-green.
 gRPC, real database drivers, long soak, Windows/Linux native packaging and a
-full in-process SDK restart after shutdown remain unqualified.
+full foreign-framework restart after shutdown remain unqualified.
 
 Full private evidence is in the coordinating audit's `evidence/node/report.json`
 and `report.md`, with exact artifacts, hashes, source lines, advisories and gaps.
@@ -112,3 +112,21 @@ Primary references:
 - https://github.com/open-telemetry/opentelemetry-js/releases/tag/v3.0.0
 - https://github.com/open-telemetry/opentelemetry-js-contrib/security/advisories/GHSA-qqmp-wf37-98f9
 - https://nodejs.org/en/about/previous-releases
+
+Independent review confirmed a P1: shutdown left closed global providers
+registered, so reinitialization reported healthy but exported nothing. Runtime
+cleanup now unregisters only still-current trace/metric identities it actually
+registered. Occupied requested providers reject startup or return explicitly
+unstarted fail-open; foreign and later replacement providers are preserved.
+Reusing a bounded instrumentation pool also restores HTTP hooks after restart,
+avoiding fresh instances that cannot repatch upstream's cached core modules.
+Four alternating CJS/ESM generations now export decoded traces and counters to
+two selected destinations, retain actual HTTP/context propagation and reject
+cross-destination/stale-handle interference. The regression failed before the
+fix; synthetic isStarted-only lifecycle tests were insufficient.
+
+Ambient OTLP header merging is upstream behavior and documented in README.
+An explicit URL does not clear unrelated ambient credentials. This SDK does
+not mutate shared environment variables or claim independent-destination
+credential ownership; a wrapper selecting that policy must guard it explicitly.
+The strict 3% performance gate remains unchanged and blocks release.

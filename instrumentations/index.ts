@@ -3,7 +3,7 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { Instrumentation } from '@opentelemetry/instrumentation';
 import type { ServerResponse } from 'http';
 import { ResolvedPrivacyConfig } from '../core/exporter';
-import { InstrumentationsConfig } from './config';
+import { INSTRUMENTATION_NAMES, InstrumentationsConfig } from './config';
 import { getAutoInstrumentationsConfig } from './registry';
 
 export interface BuildInstrumentationsOptions {
@@ -62,11 +62,27 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
     };
   }
 
-  return getNodeAutoInstrumentations(autoConfig).filter(instrumentation => {
-    const included = Object.hasOwn(autoConfig, instrumentation.instrumentationName)
-      && instrumentation.getConfig().enabled !== false;
-    // Constructors can enable hooks before the SDK registers the selected set.
-    if (!included) instrumentation.disable();
-    return included;
+  const key = Symbol.for('elven.observability.node.instrumentations.v1');
+  const registry = globalThis as typeof globalThis & { [key]?: Instrumentation[] };
+  if (!registry[key]) {
+    // Reuse public instrumentation instances: upstream caches require hooks and
+    // a fresh instance cannot repatch already-cached core modules after restart.
+    const creationConfig = getAutoInstrumentationsConfig({
+      config: Object.fromEntries(INSTRUMENTATION_NAMES.map(name => [name, { enabled: true }])),
+      privacy: options.privacy,
+    });
+    registry[key] = getNodeAutoInstrumentations(creationConfig).filter(instrumentation => {
+      const included = Object.hasOwn(creationConfig, instrumentation.instrumentationName)
+        && instrumentation.getConfig().enabled !== false;
+      if (!included) instrumentation.disable();
+      return included;
+    });
+  }
+  return registry[key].filter(instrumentation => {
+    const config = autoConfig[instrumentation.instrumentationName] as Parameters<Instrumentation['setConfig']>[0];
+    instrumentation.setConfig(config);
+    if (config?.enabled === false) { instrumentation.disable(); return false; }
+    instrumentation.enable();
+    return true;
   });
 }

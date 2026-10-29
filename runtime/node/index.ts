@@ -1,4 +1,4 @@
-import { Sampler, TextMapPropagator } from '@opentelemetry/api';
+import { metrics, ProxyTracerProvider, Sampler, TextMapPropagator, trace, TracerProvider, MeterProvider } from '@opentelemetry/api';
 import { Instrumentation } from '@opentelemetry/instrumentation';
 import { Resource } from '@opentelemetry/resources';
 import { MetricReader, ViewOptions } from '@opentelemetry/sdk-metrics';
@@ -21,6 +21,9 @@ export class NodeRuntime {
   private _spanProcessors: SpanProcessor[];
   private _metricReaders: MetricReader[];
   private _started = false;
+  private _ownedTracer: TracerProvider | undefined;
+  private _ownedTraceDelegate: TracerProvider | undefined;
+  private _ownedMeter: MeterProvider | undefined;
 
   constructor(config: NodeRuntimeConfig) {
     this._spanProcessors = config.spanProcessors ?? [];
@@ -53,7 +56,24 @@ export class NodeRuntime {
 
   public async start(): Promise<void> {
     if (this._started) return;
-    await Promise.resolve(this._sdk.start());
+    const beforeTracer = trace.getTracerProvider();
+    const beforeDelegate = traceDelegate(beforeTracer);
+    const beforeMeter = metrics.getMeterProvider();
+    this._sdk.start();
+    const afterTracer = trace.getTracerProvider();
+    const afterDelegate = traceDelegate(afterTracer);
+    const afterMeter = metrics.getMeterProvider();
+    if (afterDelegate !== beforeDelegate) {
+      this._ownedTracer = afterTracer;
+      this._ownedTraceDelegate = afterDelegate;
+    }
+    if (afterMeter !== beforeMeter) this._ownedMeter = afterMeter;
+    // NodeSDK silently ignores failed global registration. A healthy handle
+    // must not point at a foreign or previously closed signal pipeline.
+    if ((this._spanProcessors.length > 0 && !this._ownedTracer)
+      || (this._metricReaders.length > 0 && !this._ownedMeter)) {
+      throw new Error('Requested telemetry pipeline could not register its global provider');
+    }
     this._started = true;
   }
 
@@ -67,11 +87,26 @@ export class NodeRuntime {
   }
 
   public async shutdown(): Promise<void> {
-    await this._sdk.shutdown();
-    this._started = false;
+    try {
+      await this._sdk.shutdown();
+    } finally {
+      // Only unregister this generation's still-current public API identities.
+      // NodeSDK shuts its providers down but leaves their global registration.
+      if (this._ownedTracer && trace.getTracerProvider() === this._ownedTracer
+        && traceDelegate(this._ownedTracer) === this._ownedTraceDelegate) trace.disable();
+      if (this._ownedMeter && metrics.getMeterProvider() === this._ownedMeter) metrics.disable();
+      this._ownedTracer = undefined;
+      this._ownedTraceDelegate = undefined;
+      this._ownedMeter = undefined;
+      this._started = false;
+    }
   }
 
   public isStarted(): boolean {
     return this._started;
   }
+}
+
+function traceDelegate(provider: TracerProvider): TracerProvider {
+  return provider instanceof ProxyTracerProvider ? provider.getDelegate() : provider;
 }
