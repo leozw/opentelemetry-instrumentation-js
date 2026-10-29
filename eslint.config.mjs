@@ -6,7 +6,7 @@ export default tseslint.config(
   ...tseslint.configs.strict,
   ...tseslint.configs.stylistic,
   {
-    ignores: ['dist', 'node_modules', 'coverage', '**/*.js', '*.mjs', '*.cjs', 'tests/**', 'benchmarks/**'],
+    ignores: ['dist', 'node_modules', 'coverage', '.benchmark-results/**', '**/*.js', '*.mjs', '*.cjs', 'tests/**', 'benchmarks/**'],
   },
   {
     rules: {
@@ -15,5 +15,12 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-definitions': ['error', 'interface'],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
+  },
+  {
+    files: ['scripts/**/*.cjs'],
+    languageOptions: {
+      globals: Object.fromEntries(['require', 'module', '__dirname', 'process', 'console', 'fetch', 'AbortSignal'].map(name => [name, 'readonly'])),
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
 );

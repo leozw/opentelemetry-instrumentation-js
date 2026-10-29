@@ -17,8 +17,8 @@ import {
 export class TracerFacade {
   private _tracer: Tracer;
 
-  constructor(name: string, version?: string) {
-    this._tracer = trace.getTracer(name, version);
+  constructor(name: string, version?: string, tracer?: Tracer) {
+    this._tracer = tracer ?? trace.getTracer(name, version);
   }
 
   /**
