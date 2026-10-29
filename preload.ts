@@ -1,4 +1,5 @@
 import { initObservability } from './api/index';
+import { isMainThread } from 'node:worker_threads';
 
 // Try to load .env if available
 try {
@@ -16,7 +17,7 @@ if (!process.env.OTEL_SEMCONV_STABILITY_OPT_IN) {
   process.env.OTEL_SEMCONV_STABILITY_OPT_IN = 'http';
 }
 
-const shouldInit = process.env.OTEL_ZERO_CODE !== 'false';
+const shouldInit = isMainThread && process.env.OTEL_ZERO_CODE !== 'false';
 
 if (shouldInit) {
   void initObservability({

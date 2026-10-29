@@ -23,7 +23,7 @@ export class ExporterFactory {
     if (protocol === 'grpc') {
       return new OTLPGrpcTraceExporter(exportConfig);
     }
-    return new OTLPHttpTraceExporter(exportConfig);
+    return createBoundedHttpExporter(options => new OTLPHttpTraceExporter(options), exportConfig, 'TRACES');
   }
 
   public static createMetricExporter(config: ExporterConfig): PushMetricExporter {
@@ -44,7 +44,7 @@ export class ExporterFactory {
     if (protocol === 'grpc') {
       return new OTLPGrpcMetricExporter(exportConfig);
     }
-    return new OTLPHttpMetricExporter(exportConfig);
+    return createBoundedHttpExporter(options => new OTLPHttpMetricExporter(options), exportConfig, 'METRICS');
   }
 }
 
@@ -54,6 +54,20 @@ import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/expor
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { boundedAgent } from './BoundedAgent';
+
+function createBoundedHttpExporter<T extends SpanExporter | PushMetricExporter>(create: (options: any) => T, config: any, signal: 'TRACES' | 'METRICS'): T {
+  const parsed = Number(process.env[`OTEL_EXPORTER_OTLP_${signal}_TIMEOUT`] ?? process.env.OTEL_EXPORTER_OTLP_TIMEOUT ?? 10_000);
+  const timeoutMillis = Number.isFinite(parsed) && parsed > 0 ? Math.min(60_000, parsed) : 10_000;
+  const agents = boundedAgent(timeoutMillis);
+  const exporter = create({ ...config, timeoutMillis, httpAgentOptions: agents.factory });
+  const shutdown = exporter.shutdown.bind(exporter);
+  exporter.shutdown = async () => {
+    try { await shutdown(); }
+    finally { agents.destroy(); }
+  };
+  return exporter;
+}
 
 export type Protocol = 'grpc' | 'http/protobuf';
 export type Compression = 'gzip' | 'none';

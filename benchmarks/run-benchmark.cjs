@@ -2,11 +2,10 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const autocannon = require('autocannon');
+const http = require('node:http');
 
 const execFile = promisify(require('node:child_process').execFile);
 
-const BASELINE_PORT = 4400;
-const INSTRUMENTED_PORT = 4401;
 const BUDGET_PERCENT = 3;
 const WARMUP_SECONDS = 3;
 const MEASURE_SECONDS = 6;
@@ -14,21 +13,37 @@ const MEASURE_RUNS = 3;
 const CONNECTIONS = 100;
 
 async function main() {
-  const baselineServer = await startServer({ port: BASELINE_PORT, instrumented: false });
-  const instrumentedServer = await startServer({ port: INSTRUMENTED_PORT, instrumented: true });
+  const exportsReceived = { traces: 0, metrics: 0 };
+  const collector = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.url === '/v1/traces') exportsReceived.traces++;
+      if (req.url === '/v1/metrics') exportsReceived.metrics++;
+      res.writeHead(200, { 'content-type': 'application/x-protobuf' });
+      res.end();
+    });
+  });
+  await new Promise(resolve => collector.listen(0, '127.0.0.1', resolve));
+  const collectorEndpoint = `http://127.0.0.1:${collector.address().port}`;
+  let baselineServer;
+  let instrumentedServer;
 
   try {
-    await runAutocannon(BASELINE_PORT, WARMUP_SECONDS);
-    await runAutocannon(INSTRUMENTED_PORT, WARMUP_SECONDS);
+    baselineServer = await startServer({ port: 0, instrumented: false, collectorEndpoint });
+    instrumentedServer = await startServer({ port: 0, instrumented: true, collectorEndpoint });
+    const baselinePort = baselineServer.benchmarkPort;
+    const instrumentedPort = instrumentedServer.benchmarkPort;
+    await runAutocannon(baselinePort, WARMUP_SECONDS);
+    await runAutocannon(instrumentedPort, WARMUP_SECONDS);
 
     const runResults = [];
     for (let index = 0; index < MEASURE_RUNS; index++) {
       const [baseline, baselineStats] = await Promise.all([
-        runAutocannon(BASELINE_PORT, MEASURE_SECONDS),
+        runAutocannon(baselinePort, MEASURE_SECONDS),
         sampleServerStats(baselineServer.pid, MEASURE_SECONDS),
       ]);
       const [instrumented, instrumentedStats] = await Promise.all([
-        runAutocannon(INSTRUMENTED_PORT, MEASURE_SECONDS),
+        runAutocannon(instrumentedPort, MEASURE_SECONDS),
         sampleServerStats(instrumentedServer.pid, MEASURE_SECONDS),
       ]);
       const overheadResult = computeOverhead(baseline, instrumented);
@@ -44,7 +59,7 @@ async function main() {
 
       // eslint-disable-next-line no-console
       console.log(
-        `[benchmark][run ${index + 1}] baseline p95=${baseline.latencyP95.toFixed(2)}ms | instrumented p95=${instrumented.latencyP95.toFixed(2)}ms | baseline rps=${baseline.requests.toFixed(2)} | instrumented rps=${instrumented.requests.toFixed(2)} | overhead=${overheadResult.overhead.toFixed(2)}% (${overheadResult.metric})`
+        `[benchmark][run ${index + 1}] baseline p99=${format(baseline.latencyP99)}ms | instrumented p99=${format(instrumented.latencyP99)}ms | baseline rps=${baseline.requests.toFixed(2)} | instrumented rps=${instrumented.requests.toFixed(2)} | overhead=${overheadResult.overhead.toFixed(2)}% (${overheadResult.metric})`
       );
     }
 
@@ -54,15 +69,19 @@ async function main() {
 
     const avgBaselineCpu = average(runResults.map((result) => result.baselineStats.avgCpuPercent));
     const avgInstrumentedCpu = average(runResults.map((result) => result.instrumentedStats.avgCpuPercent));
-    const peakBaselineRss = Math.max(...runResults.map((result) => result.baselineStats.peakRssMb));
-    const peakInstrumentedRss = Math.max(...runResults.map((result) => result.instrumentedStats.peakRssMb));
+    const baselineRss = runResults.map((result) => result.baselineStats.peakRssMb).filter(Number.isFinite);
+    const instrumentedRss = runResults.map((result) => result.instrumentedStats.peakRssMb).filter(Number.isFinite);
+    const peakBaselineRss = baselineRss.length ? Math.max(...baselineRss) : null;
+    const peakInstrumentedRss = instrumentedRss.length ? Math.max(...instrumentedRss) : null;
 
     // eslint-disable-next-line no-console
     console.log(`[benchmark] final-overhead=${finalOverhead.toFixed(2)}% (${metric}, median of ${MEASURE_RUNS} runs)`);
     // eslint-disable-next-line no-console
     console.log(
-      `[benchmark] baseline avgCpu=${avgBaselineCpu.toFixed(2)}% peakRss=${peakBaselineRss.toFixed(2)}MB | instrumented avgCpu=${avgInstrumentedCpu.toFixed(2)}% peakRss=${peakInstrumentedRss.toFixed(2)}MB`
+      `[benchmark] baseline avgCpu=${format(avgBaselineCpu)}% peakRss=${format(peakBaselineRss)}MB | instrumented avgCpu=${format(avgInstrumentedCpu)}% peakRss=${format(peakInstrumentedRss)}MB`
     );
+    console.log(`[benchmark] local collector requests=${JSON.stringify(exportsReceived)}; shared-host observations are not universal overhead guarantees`);
+    if (!exportsReceived.traces || !exportsReceived.metrics) throw new Error('Benchmark did not prove active trace and metric export');
 
     const enforceBudget = process.env.BENCHMARK_ENFORCE_BUDGET === 'true';
     if (enforceBudget && finalOverhead > BUDGET_PERCENT) {
@@ -71,7 +90,9 @@ async function main() {
       );
     }
   } finally {
-    await Promise.all([stopServer(baselineServer), stopServer(instrumentedServer)]);
+    await Promise.all([baselineServer, instrumentedServer].filter(Boolean).map(stopServer));
+    collector.closeAllConnections();
+    await new Promise(resolve => collector.close(resolve));
   }
 }
 
@@ -91,7 +112,7 @@ function runAutocannon(port, duration) {
         }
 
         resolve({
-          latencyP95: Number(result.latency.p95 || 0),
+          latencyP99: Number.isFinite(result.latency.p99) ? result.latency.p99 : null,
           requests: Number(result.requests.average || 0),
         });
       }
@@ -101,18 +122,22 @@ function runAutocannon(port, duration) {
   });
 }
 
-function startServer({ port, instrumented }) {
+function startServer({ port, instrumented, collectorEndpoint }) {
   return new Promise((resolve, reject) => {
     const serverFile = path.resolve(__dirname, 'server.cjs');
-    const preloadFile = path.resolve(__dirname, '..', 'dist', 'preload.js');
+    const preloadFile = process.env.BENCHMARK_PRELOAD_PATH || path.resolve(__dirname, '..', 'dist', 'preload.js');
 
     const env = {
       ...process.env,
       BENCHMARK_PORT: String(port),
       OTEL_AUTO_SHUTDOWN: 'false',
       OTEL_ZERO_CODE: instrumented ? 'true' : 'false',
-      OTEL_TRACES_EXPORTER: 'none',
-      OTEL_METRICS_EXPORTER: 'none',
+      OTEL_TRACES_EXPORTER: instrumented ? 'otlp' : 'none',
+      OTEL_METRICS_EXPORTER: instrumented ? 'otlp' : 'none',
+      OTEL_EXPORTER_OTLP_ENDPOINT: collectorEndpoint,
+      OTEL_EXPORTER_OTLP_TIMEOUT: '1000',
+      OTEL_BSP_SCHEDULE_DELAY: '100',
+      OTEL_METRIC_EXPORT_INTERVAL: '1000',
       NODE_OPTIONS: instrumented
         ? `${process.env.NODE_OPTIONS || ''} --require ${preloadFile}`.trim()
         : process.env.NODE_OPTIONS || '',
@@ -136,8 +161,10 @@ function startServer({ port, instrumented }) {
 
     child.stdout.on('data', (chunk) => {
       const value = chunk.toString();
-      if (value.includes(`benchmark-server-ready:${port}`)) {
+      const ready = value.match(/benchmark-server-ready:(\d+)/);
+      if (ready) {
         clearTimeout(timeout);
+        child.benchmarkPort = Number(ready[1]);
         resolve(child);
       }
     });
@@ -178,8 +205,9 @@ async function sampleServerStats(pid, durationSeconds) {
 
   if (samples.length === 0) {
     return {
-      avgCpuPercent: 0,
-      peakRssMb: 0,
+      avgCpuPercent: null,
+      peakRssMb: null,
+      samples: 0,
     };
   }
 
@@ -189,6 +217,7 @@ async function sampleServerStats(pid, durationSeconds) {
   return {
     avgCpuPercent: totalCpu / samples.length,
     peakRssMb: peakRssKb / 1024,
+    samples: samples.length,
   };
 }
 
@@ -215,10 +244,10 @@ function sleep(ms) {
 }
 
 function computeOverhead(baseline, instrumented) {
-  if (baseline.latencyP95 > 0) {
+  if (baseline.latencyP99 > 0 && Number.isFinite(instrumented.latencyP99)) {
     return {
-      overhead: ((instrumented.latencyP95 - baseline.latencyP95) / baseline.latencyP95) * 100,
-      metric: 'p95-latency',
+      overhead: ((instrumented.latencyP99 - baseline.latencyP99) / baseline.latencyP99) * 100,
+      metric: 'p99-latency',
     };
   }
 
@@ -233,9 +262,12 @@ function computeOverhead(baseline, instrumented) {
 }
 
 function average(values) {
-  if (values.length === 0) return 0;
-  return values.reduce((acc, value) => acc + value, 0) / values.length;
+  const known = values.filter(Number.isFinite);
+  if (known.length === 0) return null;
+  return known.reduce((acc, value) => acc + value, 0) / known.length;
 }
+
+function format(value) { return Number.isFinite(value) ? value.toFixed(2) : 'UNKNOWN'; }
 
 function median(values) {
   if (values.length === 0) return 0;

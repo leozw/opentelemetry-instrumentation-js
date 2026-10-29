@@ -31,6 +31,14 @@ export class NodeRuntime {
       // This package correlates logs but does not own a log export pipeline.
       // An explicit empty list prevents NodeSDK from creating its default OTLP logger.
       logRecordProcessors: [],
+      spanLimits: {
+        attributeValueLengthLimit: 4096,
+        attributeCountLimit: 128,
+        eventCountLimit: 64,
+        linkCountLimit: 64,
+        attributePerEventCountLimit: 64,
+        attributePerLinkCountLimit: 64,
+      },
       resourceDetectors: config.resourceDetectors ?? [],
       autoDetectResources: false,
       // Spread optional properties to avoid passing undefined
@@ -59,7 +67,6 @@ export class NodeRuntime {
   }
 
   public async shutdown(): Promise<void> {
-    if (!this._started) return;
     await this._sdk.shutdown();
     this._started = false;
   }

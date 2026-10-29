@@ -86,6 +86,7 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
   }
 
   return getNodeAutoInstrumentations(autoConfig).filter(
-    (instrumentation) => instrumentation.getConfig().enabled !== false
+    (instrumentation) => Object.hasOwn(autoConfig, instrumentation.instrumentationName)
+      && instrumentation.getConfig().enabled !== false
   );
 }

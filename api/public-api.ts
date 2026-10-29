@@ -1,4 +1,5 @@
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
+import { createNoopMeter, ProxyTracerProvider } from '@opentelemetry/api';
 import { PeriodicExportingMetricReader, PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import {
   AlwaysOffSampler,
@@ -15,6 +16,7 @@ import { NetworkPropagator } from '../core/propagation';
 import { ResourceBuilder } from '../core/resources';
 import { createSmartSampler } from '../core/sampler';
 import { TracerFacade } from '../core/tracing';
+import { SpanPayloadLimitProcessor } from '../core/tracing/SpanPayloadLimitProcessor';
 import { getCoreInstrumentations } from '../instrumentations';
 import { NodeRuntime } from '../runtime/node';
 import { ObservabilityConfig, ObservabilityHandle } from './types';
@@ -31,8 +33,46 @@ let runtimeInstance: NodeRuntime | null = null;
 let activeHandle: ObservabilityHandle | null = null;
 let gracefulShutdownHookRegistered = false;
 let unregisterInstrumentations: (() => void) | null = null;
+let removeShutdownHooks: (() => void) | null = null;
+
+const registryKey = Symbol.for('elven.observability.node.lifecycle.v1');
+const registry = globalThis as typeof globalThis & {
+  [registryKey]?: { pending?: Promise<ObservabilityHandle>; handle?: ObservabilityHandle };
+};
+const sharedLifecycle = registry[registryKey] ??= {};
 
 export async function initObservability(config: ObservabilityConfig): Promise<ObservabilityHandle> {
+  if (sharedLifecycle.handle?.isStarted()) {
+    tracer = sharedLifecycle.handle.tracer;
+    metrics = sharedLifecycle.handle.metrics;
+    return sharedLifecycle.handle;
+  }
+  if (!sharedLifecycle.pending) {
+    sharedLifecycle.pending = initLocal(config);
+  }
+  try {
+    const handle = await sharedLifecycle.pending;
+    sharedLifecycle.handle = handle;
+    tracer = handle.tracer;
+    metrics = handle.metrics;
+    return handle;
+  } catch (error) {
+    if (config.failOpen !== true) throw error;
+    tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion,
+      new ProxyTracerProvider().getTracer(config.service.serviceName));
+    metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion, createNoopMeter());
+    return {
+      tracer, metrics,
+      isStarted: () => false,
+      forceFlush: () => Promise.resolve(),
+      shutdown: () => Promise.resolve(),
+    };
+  } finally {
+    delete sharedLifecycle.pending;
+  }
+}
+
+async function initLocal(config: ObservabilityConfig): Promise<ObservabilityHandle> {
   if (lifecycleState === 'starting' && startupPromise) {
     return startupPromise;
   }
@@ -82,7 +122,7 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     const traceExporter = createTraceExporter(config, tracingEnabled, resolvedPrivacy);
     if (traceExporter) {
       spanProcessors.push(
-        new BatchSpanProcessor(traceExporter, resolveSpanProcessorConfig())
+        new SpanPayloadLimitProcessor(new BatchSpanProcessor(traceExporter, resolveSpanProcessorConfig()))
       );
     }
 
@@ -167,6 +207,7 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
 
     return activeHandle;
   } catch (error) {
+    try { await runtimeInstance?.shutdown(); } catch { /* Preserve the original startup failure. */ }
     unregisterInstrumentations?.();
     unregisterInstrumentations = null;
     startupPromise = null;
@@ -187,13 +228,18 @@ async function shutdownObservability(): Promise<void> {
 
   shutdownPromise = (async () => {
     try {
-      await forceFlushObservability();
+      // NodeSDK.shutdown flushes processors itself; a preceding failed forceFlush
+      // must not skip cleanup or double the exporter retry budget.
       await runtimeInstance?.shutdown();
     } finally {
+      removeShutdownHooks?.();
+      removeShutdownHooks = null;
+      gracefulShutdownHookRegistered = false;
       unregisterInstrumentations?.();
       unregisterInstrumentations = null;
       runtimeInstance = null;
       activeHandle = null;
+      delete sharedLifecycle.handle;
       startupPromise = null;
       shutdownPromise = null;
       lifecycleState = 'idle';
@@ -247,15 +293,16 @@ function createSampler(config: ObservabilityConfig, tracingEnabled: boolean): Sa
 }
 
 function createHandle(): ObservabilityHandle {
-  return {
+  const handle: ObservabilityHandle = {
     tracer,
     metrics,
-    shutdown: shutdownObservability,
-    forceFlush: forceFlushObservability,
-    isStarted: () => lifecycleState === 'started' && (
+    shutdown: () => activeHandle === handle ? shutdownObservability() : Promise.resolve(),
+    forceFlush: () => activeHandle === handle ? forceFlushObservability() : Promise.resolve(),
+    isStarted: () => activeHandle === handle && lifecycleState === 'started' && (
       runtimeInstance === null || runtimeInstance.isStarted()
     ),
   };
+  return handle;
 }
 
 function resolveSpanProcessorConfig(): SpanBufferConfig {
@@ -403,23 +450,34 @@ function resolveBooleanEnv(rawValue: string | undefined): boolean | undefined {
 function registerGracefulShutdownHook(): void {
   gracefulShutdownHookRegistered = true;
 
-  const shutdownAndExit = async (signal: string) => {
+  const shutdownAndExit = async (signal: 'SIGINT' | 'SIGTERM') => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      await shutdownObservability();
+      await Promise.race([
+        shutdownObservability(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('Telemetry shutdown deadline exceeded')), 10_000);
+        }),
+      ]);
     } catch (err) {
       console.warn(`[instrumentation-js] graceful shutdown failed on ${signal}:`, err);
     } finally {
-      process.exit(0);
+      if (timeout) clearTimeout(timeout);
+      removeShutdownHooks?.();
+      // Leave application-owned signal handlers in charge. Without one, restore
+      // the platform's normal signal termination (including its exit status).
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
     }
   };
 
-  process.once('SIGINT', () => {
-    void shutdownAndExit('SIGINT');
-  });
-
-  process.once('SIGTERM', () => {
-    void shutdownAndExit('SIGTERM');
-  });
+  const onInt = () => { void shutdownAndExit('SIGINT'); };
+  const onTerm = () => { void shutdownAndExit('SIGTERM'); };
+  process.once('SIGINT', onInt);
+  process.once('SIGTERM', onTerm);
+  removeShutdownHooks = () => {
+    process.off('SIGINT', onInt);
+    process.off('SIGTERM', onTerm);
+  };
 }
 
 export { MetricFacade } from '../core/metrics';

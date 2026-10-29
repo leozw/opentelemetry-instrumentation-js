@@ -54,8 +54,9 @@ export class SmartSampler implements Sampler {
         if (rule.attributeValue === val) {
           return { decision: rule.decision };
         }
-        if (rule.attributeValue instanceof RegExp && typeof val === 'string' && rule.attributeValue.test(val)) {
-          return { decision: rule.decision };
+        if (rule.attributeValue instanceof RegExp && typeof val === 'string') {
+          rule.attributeValue.lastIndex = 0;
+          if (rule.attributeValue.test(val.slice(0, 4096))) return { decision: rule.decision };
         }
       }
     }

@@ -1,4 +1,10 @@
-# OpenTelemetry Instrumentation JS (v2)
+# Elven OpenTelemetry Instrumentation JS
+
+Candidate package version: `1.0.9` (not published by this audit). The earlier
+"v2" headings describe the API design, not an npm `2.x` release.
+
+Official [Node.js integration guide](https://docs.elven.works/elven-observability/integracao-e-instrumentacao/javascript/instrumentacao-node.js-com-elven-observability.html)
+and [documentation source](https://github.com/elvenworks-ps/docs.elven.works).
 
 Node-first OpenTelemetry bootstrap for JavaScript services, focused on:
 
@@ -15,6 +21,16 @@ npm install elven-opentelemetry-instrumentation-js
 ```
 
 ## Runtime support
+
+The compatibility floor is `^18.19.0 || >=20.6.0`, matching OTel 2.x.
+Node 18 and 20 are EOL: compatibility is not security support. Use a maintained,
+patched Node 22, 24 or 26 release. Development tools may require a newer Node
+than the production package. See [Node releases](https://nodejs.org/en/about/previous-releases).
+
+This patch deliberately uses OTel `2.12.x` / `0.223.x` and auto-instrumentations
+`0.81.x`. The latest generation, OTel `3.x` / `0.300.x`, requires Node >=22.15.0
+and a separate migration. Experimental OTel ranges are restricted to one minor
+generation; package-lock.json records the audited development graph.
 
 v2 supports `runtime: 'node'` only.
 
@@ -95,6 +111,17 @@ await observability.shutdown();
 - `isStarted(): boolean`
 
 The initializer is idempotent and protects against duplicate concurrent startup.
+The first configuration wins across CJS and ESM entrypoints in one isolate.
+Startup failures reject by default (`failOpen: false`), including invalid exporter
+configuration. `failOpen: true` returns a no-op handle with `isStarted() === false`;
+it is not a successful component startup. Later network/export failures remain
+asynchronous and are not startup failure proof. Existing 1.0.8 API names remain.
+Preload skips Worker threads; initialize explicitly inside an application Worker
+when needed. Child and cluster processes initialize independently, inheriting
+`NODE_OPTIONS` and environment in the normal Node way. Internal log Workers do
+not inherit preload options. Set `autoShutdown: false` when the application
+owns shutdown and await `shutdown()` there. Automatic signal shutdown has a
+10-second deadline and does not call `process.exit(0)` over application handlers.
 
 ## Feature precedence
 
@@ -134,6 +161,18 @@ The default trace queue is 512 spans with batches of 128. Metrics default to a
 and export batches of 512. Standard OpenTelemetry batch processor environment
 variables can override the trace limits.
 
+MetricFacade retains at most 128 instrument names in total; use stable names,
+not per-request names. Further names return no-op instruments and increment
+`getDroppedInstruments()`. This is separate from per-instrument attribute
+cardinality. Redaction covers span, event and link attribute maps, without
+mutating the original span. It is not a general PII filter for span names,
+exception messages, resource attributes or arbitrary user-defined strings.
+Spans cap attribute string values at 4096 characters, 128 span attributes,
+64 events/links and 64 attributes per event/link. A payload guard drops spans
+over an estimated 64 KiB or with attribute arrays over 64 values before queueing.
+These are telemetry drop limits, not process RSS guarantees; large application
+objects can still allocate before being handed to OpenTelemetry.
+
 The Node SDK log exporter is explicitly disabled in this package. Logs are
 correlated with traces, but their shipping remains the responsibility of the
 Elven logs interceptor.
@@ -144,7 +183,7 @@ Instrumentation is activated only when the target module is installed and enable
 
 Supported:
 
-- HTTP, Express, Fastify, GraphQL
+- HTTP, Express, GraphQL (the current upstream auto bundle no longer includes Fastify)
 - PostgreSQL, MySQL2, MongoDB, Mongoose
 - Redis (`redis` and `ioredis`), Knex, generic-pool
 - NestJS, Koa
@@ -157,7 +196,10 @@ Default privacy policy:
 
 - redact `db.statement` and `db.query.text`
 - hash `user.id` and `enduser.id`
+- redact DB usernames, authorization/cookie attributes, URL credentials and query values
 - allowlist raw attributes via `privacy.allowRawAttributes`
+
+User ID hashing is deterministic pseudonymization, not irreversible anonymization.
 
 ## Development
 
@@ -168,4 +210,13 @@ npm test
 npm run benchmark
 ```
 
-`npm run benchmark:ci` enforces the p95 latency overhead budget (`< 3%`).
+The benchmark now requires actual HTTP trace and metric export to a local
+collector; disabling both signals is not an instrumentation benchmark.
+`npm run benchmark:ci` enforces the existing 3% local comparison
+budget. Shared CI and workstation results are noisy observations, not a
+universal overhead guarantee. The existing CI budget remains enforced; a failed
+budget is a performance-qualification blocker, not permission to waive the gate.
+Set `BENCHMARK_PRELOAD_PATH` to compare another built/published package using
+the same active-export harness.
+Autocannon exposes p99, not p95; the harness uses p99 and only falls back to
+throughput when latency is unavailable. Missing process samples remain UNKNOWN.
