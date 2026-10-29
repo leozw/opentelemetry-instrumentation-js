@@ -80,3 +80,42 @@ test('shutdown removes only its handlers and preserves an application signal exi
   `], { cwd: require('node:path').resolve(__dirname, '..'), timeout: 5000, env: { ...process.env, OTEL_TRACES_EXPORTER: 'console' } });
   assert.equal(result.status, 23, result.stderr?.toString());
 });
+
+for (const position of ['before', 'after', 'prepend-after']) {
+  test(`application once signal ownership survives SDK shutdown (${position})`, () => {
+    const register = `process.${position === 'prepend-after' ? 'prependOnceListener' : 'once'}('SIGTERM',()=>setTimeout(()=>process.exit(23),50));`;
+    const result = spawnSync(process.execPath, ['-e', `
+      (async()=>{
+        ${position === 'before' ? register : ''}
+        const handle=await require('./dist/index.js').initObservability({autoShutdown:true,service:{serviceName:'once-signals',serviceVersion:'1'},tracing:{enabled:true},metrics:{enabled:false},instrumentations:false});
+        ${position !== 'before' ? register : ''}
+        if(!handle.isStarted()||process.listenerCount('SIGTERM')<2)throw new Error('Signal test did not register SDK and application hooks');
+        require('node:http').createServer().listen(0);
+        process.kill(process.pid,'SIGTERM');
+        setTimeout(()=>process.exit(99),1000);
+      })();
+    `], { cwd: require('node:path').resolve(__dirname, '..'), timeout: 5000, env: { ...process.env, OTEL_TRACES_EXPORTER:'console', OTEL_METRICS_EXPORTER:'none' } });
+    assert.equal(result.status, 23, `${result.signal}: ${result.stderr?.toString()}`);
+  });
+}
+
+for (const mode of ['none', 'removed-earlier']) {
+  test(`normal signal termination remains intact (${mode})`, () => {
+    const result = spawnSync(process.execPath, ['-e', `
+      (async()=>{
+        const handle=await require('./dist/index.js').initObservability({autoShutdown:true,service:{serviceName:'default-signal'},tracing:{enabled:true},metrics:{enabled:false},instrumentations:false});
+        if(!handle.isStarted()||process.listenerCount('SIGTERM')!==1)throw new Error('SDK signal hook missing');
+        ${mode === 'removed-earlier' ? "const listener=()=>{};process.once('SIGTERM',listener);process.off('SIGTERM',listener);await new Promise(resolve=>setImmediate(resolve));" : ''}
+        require('node:http').createServer().listen(0);
+        process.kill(process.pid,'SIGTERM');
+        setTimeout(()=>process.exit(99),1000);
+      })();
+    `], { cwd: require('node:path').resolve(__dirname, '..'), timeout:5000,env:{...process.env,OTEL_TRACES_EXPORTER:'console',OTEL_METRICS_EXPORTER:'none'} });
+    assert.equal(result.signal,'SIGTERM',result.stderr?.toString());
+  });
+}
+
+test('shutdown removes its bounded signal-removal observer', () => {
+  const result=spawnSync(process.execPath,['-e',`(async()=>{const before=process.listenerCount('removeListener');const h=await require('./dist/index.js').initObservability({autoShutdown:true,service:{serviceName:'observer'},tracing:{enabled:true},metrics:{enabled:false},instrumentations:false});if(process.listenerCount('removeListener')!==before+1)throw new Error('Observer missing');await h.shutdown();if(process.listenerCount('removeListener')!==before)throw new Error('Observer leaked');})().catch(e=>{console.error(e);process.exitCode=1});`],{cwd:require('node:path').resolve(__dirname,'..'),timeout:5000,env:{...process.env,OTEL_TRACES_EXPORTER:'console',OTEL_METRICS_EXPORTER:'none'}});
+  assert.equal(result.status,0,result.stderr?.toString());
+});

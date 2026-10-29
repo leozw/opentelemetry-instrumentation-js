@@ -22,7 +22,7 @@ was performed. The npm package identity and the 1.0.8 public API are retained.
 
 ## Verification
 
-Twenty-three native Node tests, lint, typecheck and build passed. Clean packed CJS,
+Thirty native Node tests, lint, typecheck and build passed. Clean packed CJS,
 ESM and preload consumers exported actual OTLP protobuf on Node 18/20/22/24/26.
 A strict packed TypeScript consumer accepts `failOpen: false`, the public handle,
 and both facades without casts. The clean production graph has zero npm
@@ -70,6 +70,21 @@ run. These are observations on shared hosted runners, not universal guarantees.
 A follow-up test also prevents unselected upstream instrumentation instances
 from retaining constructor-enabled hooks after they are filtered out. Selected
 HTTP/database/framework coverage and privacy remain enabled as configured.
+
+The published 1.0.8 README explicitly promises p95 <3%. Its historical main
+harness disabled trace/metric export and read an absent p95 field as zero,
+falling back to throughput. That was not proof of the published p95 promise.
+The audit retains the enforced 3% p99 check and also measures/enforces the
+documented p95 from public autocannon response events using native microsecond
+HDR samples; missing samples fail closed. No feature, privacy setting or gate
+was removed. Historical inactive, audited active and revised harnesses are
+separate receipts. Measurements do not establish physical impossibility for
+every workload; this synthetic capacity profile remains a release blocker.
+
+Signal regressions also cover application once/prependOnce handlers, normal
+signal exit status, removed-earlier handlers and observer cleanup. An observer
+remembers once-handler removal only until the next microtask, without retaining
+application functions or mistaking it for permission to re-signal the process.
 
 Primary references:
 - https://github.com/open-telemetry/opentelemetry-js/releases/tag/v2.12.0

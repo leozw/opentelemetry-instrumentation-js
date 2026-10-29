@@ -449,8 +449,23 @@ function resolveBooleanEnv(rawValue: string | undefined): boolean | undefined {
 
 function registerGracefulShutdownHook(): void {
   gracefulShutdownHookRegistered = true;
+  const recentlyRemovedOwners = new Set<'SIGINT' | 'SIGTERM'>();
+  const recordRemoval = (event: string | symbol, listener: unknown) => {
+    if ((event !== 'SIGINT' && event !== 'SIGTERM') || listener === onInt || listener === onTerm || recentlyRemovedOwners.has(event)) return;
+    // EventEmitter removes an application once-handler before invoking it.
+    // Remember that ownership for this emission, without retaining its function.
+    recentlyRemovedOwners.add(event);
+    queueMicrotask(() => recentlyRemovedOwners.delete(event));
+  };
+  const cleanup = () => {
+    process.off('SIGINT', onInt);
+    process.off('SIGTERM', onTerm);
+    process.off('removeListener', recordRemoval);
+  };
 
   const shutdownAndExit = async (signal: 'SIGINT' | 'SIGTERM') => {
+    const applicationOwnsSignal = recentlyRemovedOwners.has(signal)
+      || process.listeners(signal).some(listener => listener !== onInt && listener !== onTerm);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -463,21 +478,19 @@ function registerGracefulShutdownHook(): void {
       console.warn(`[instrumentation-js] graceful shutdown failed on ${signal}:`, err);
     } finally {
       if (timeout) clearTimeout(timeout);
-      removeShutdownHooks?.();
+      cleanup();
       // Leave application-owned signal handlers in charge. Without one, restore
       // the platform's normal signal termination (including its exit status).
-      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+      if (!applicationOwnsSignal && process.listenerCount(signal) === 0) process.kill(process.pid, signal);
     }
   };
 
   const onInt = () => { void shutdownAndExit('SIGINT'); };
   const onTerm = () => { void shutdownAndExit('SIGTERM'); };
+  process.on('removeListener', recordRemoval);
   process.once('SIGINT', onInt);
   process.once('SIGTERM', onTerm);
-  removeShutdownHooks = () => {
-    process.off('SIGINT', onInt);
-    process.off('SIGTERM', onTerm);
-  };
+  removeShutdownHooks = cleanup;
 }
 
 export { MetricFacade } from '../core/metrics';

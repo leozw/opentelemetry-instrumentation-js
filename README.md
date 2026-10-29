@@ -212,8 +212,9 @@ npm run benchmark
 
 The benchmark now requires actual HTTP trace and metric export to a local
 collector; disabling both signals is not an instrumentation benchmark.
-`npm run benchmark:ci` enforces the existing 3% local comparison
-budget. Shared CI and workstation results are noisy observations, not a
+`npm run benchmark:ci` retains the existing 3% local comparison budget and p99
+guard, and measures the documented p95 from microsecond HDR response samples.
+Missing measurements fail closed. Shared CI and workstation results are noisy observations, not a
 universal overhead guarantee. The existing CI budget remains enforced; a failed
 budget is a performance-qualification blocker, not permission to waive the gate.
 Set `BENCHMARK_PRELOAD_PATH` to compare another built/published package using

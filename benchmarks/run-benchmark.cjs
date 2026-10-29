@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { createHistogram } = require('node:perf_hooks');
 const autocannon = require('autocannon');
 
 const BUDGET_PERCENT = 3;
@@ -17,6 +18,20 @@ function overhead(bare, candidate) {
   if (bare.latencyP99 > 0) return { value: (candidate.latencyP99 / bare.latencyP99 - 1) * 100, metric: 'p99-latency' };
   if (bare.requests <= 0) throw new Error('No valid throughput baseline');
   return { value: (1 - candidate.requests / bare.requests) * 100, metric: 'throughput-fallback' };
+}
+function latencyHistogram() {
+  const histogram = createHistogram({ lowest: 1, highest: 60000000, figures: 3 });
+  let invalid = 0;
+  return {
+    record(milliseconds) {
+      if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 60000) { invalid++; return; }
+      histogram.record(Math.max(1, Math.round(milliseconds * 1000)));
+    },
+    summary() {
+      if (invalid || !histogram.count) throw new Error('Missing or invalid raw latency samples');
+      return { count: histogram.count, p95Ms: histogram.percentile(95) / 1000, p99Ms: histogram.percentile(99) / 1000 };
+    },
+  };
 }
 function message(child, request) {
   return new Promise((resolve, reject) => {
@@ -70,10 +85,20 @@ async function server(variant, endpoint) {
 }
 function load(port, duration) {
   return new Promise((resolve, reject) => {
-    autocannon({ url: `http://127.0.0.1:${port}`, duration, connections: CONNECTIONS, pipelining: 1 }, (error, result) => {
+    const rawLatency = latencyHistogram();
+    const instance = autocannon({ url: `http://127.0.0.1:${port}`, duration, connections: CONNECTIONS, pipelining: 1 }, (error, result) => {
       if (error) return reject(error);
-      resolve({ latencyP99: result.latency.p99, latency: result.latency, requests: result.requests.average,
-        total: result.requests.total, errors: result.errors, timeouts: result.timeouts, non2xx: result.non2xx, duration: result.duration });
+      try {
+        const measured = rawLatency.summary();
+        if (measured.count !== result.latency.totalCount) throw new Error('Raw response sample count differs from autocannon histogram');
+        resolve({ latencyP99: result.latency.p99, latencyP95Ms: measured.p95Ms, latencyP99HighResolutionMs: measured.p99Ms,
+          latencySampleCount: measured.count, latency: result.latency, requests: result.requests.average,
+          total: result.requests.total, errors: result.errors, timeouts: result.timeouts, non2xx: result.non2xx, duration: result.duration });
+      } catch (error) { reject(error); }
+    });
+    // Public response events preserve sub-ms measurements that the default integer-ms histogram loses.
+    instance.on('response', (_client, status, _bytes, milliseconds) => {
+      if (status >= 200 && status < 300) rawLatency.record(milliseconds);
     });
   });
 }
@@ -101,7 +126,7 @@ async function main() {
   const variants = baselines?.variants || [{ name: 'bare' }, { name: 'candidate', preload: process.env.BENCHMARK_PRELOAD_PATH || path.resolve(__dirname, '..', 'dist/preload.js') }];
   const receipt = { at: new Date().toISOString(), node: process.version, platform: process.platform, arch: process.arch,
     cpu: os.cpus()[0]?.model, cpuCount: os.cpus().length, runner: { image: process.env.ImageOS, version: process.env.ImageVersion, hosted: process.env.RUNNER_ENVIRONMENT },
-    config: { budgetPercent: BUDGET_PERCENT, warmupSeconds: WARMUP_SECONDS, measureSeconds: MEASURE_SECONDS, runs: MEASURE_RUNS, connections: CONNECTIONS, pipelining: 1, sampler: 'parentbased_traceidratio', ratio: 0.1, privacy: 'default enabled', collector: 'separate process per variant', profiled: !!process.env.BENCHMARK_PROFILE_DIR },
+    config: { budgetPercent: BUDGET_PERCENT, warmupSeconds: WARMUP_SECONDS, measureSeconds: MEASURE_SECONDS, runs: MEASURE_RUNS, connections: CONNECTIONS, pipelining: 1, sampler: 'parentbased_traceidratio', ratio: 0.1, privacy: 'default enabled', collector: 'separate process per variant', p95Measurement: 'public response event -> native HDR in microseconds, 3 significant figures; p99 gate retained', profiled: !!process.env.BENCHMARK_PROFILE_DIR },
     baselines, variants: variants.map(variant => ({ ...variant, sha256: variant.preload ? createHash('sha256').update(fs.readFileSync(variant.preload)).digest('hex') : null })), rounds: [], comparisons: {} };
   const targets = new Map();
   const children = [];
@@ -125,12 +150,15 @@ async function main() {
     for (const variant of variants.filter(v => v.preload)) {
       const values = receipt.rounds.map(round => overhead(round.results.bare, round.results[variant.name]));
       receipt.comparisons[variant.name] = { versus: 'bare', medianOverheadPercent: median(values.map(v => v.value)), values, pass: median(values.map(v => v.value)) <= BUDGET_PERCENT };
+      const p95Values = receipt.rounds.map(round => (round.results[variant.name].latencyP95Ms / round.results.bare.latencyP95Ms - 1) * 100);
+      receipt.comparisons[variant.name].p95 = { medianOverheadPercent: median(p95Values), values: p95Values, pass: median(p95Values) <= BUDGET_PERCENT };
       const totals = await message(targets.get(variant.name).collector, 'stats');
       if (!totals.counts.traces || !totals.counts.metrics) throw new Error(`${variant.name}: active export not proven`);
       receipt.comparisons[variant.name].exports = totals.counts;
     }
     if (targets.has('reference')) receipt.candidateVersusReference = {
       p99DeltaPercent: median(receipt.rounds.map(r => overhead(r.results.reference, r.results.candidate).value)),
+      p95DeltaPercent: median(receipt.rounds.map(r => (r.results.candidate.latencyP95Ms / r.results.reference.latencyP95Ms - 1) * 100)),
       throughputDeltaPercent: median(receipt.rounds.map(r => (r.results.candidate.requests / r.results.reference.requests - 1) * 100)),
       cpuMicrosPerRequestDeltaPercent: median(receipt.rounds.map(r => ((r.results.candidate.cpuMicros / r.results.candidate.total) / (r.results.reference.cpuMicros / r.results.reference.total) - 1) * 100)),
     };
@@ -139,6 +167,7 @@ async function main() {
     }
     console.log(`[benchmark] comparisons=${JSON.stringify(receipt.comparisons)} reference=${JSON.stringify(receipt.candidateVersusReference)}; shared-host observations, not universal overhead guarantees`);
     if (process.env.BENCHMARK_ENFORCE_BUDGET === 'true' && !receipt.comparisons.candidate.pass) throw new Error(`Overhead budget exceeded: ${receipt.comparisons.candidate.medianOverheadPercent}% > ${BUDGET_PERCENT}%`);
+    if (process.env.BENCHMARK_ENFORCE_BUDGET === 'true' && !receipt.comparisons.candidate.p95.pass) throw new Error(`Documented p95 overhead budget exceeded: ${receipt.comparisons.candidate.p95.medianOverheadPercent}% > ${BUDGET_PERCENT}%`);
   } catch (error) { receipt.error = error.message; throw error; }
   finally {
     await Promise.all(children.map(stop));
@@ -146,4 +175,4 @@ async function main() {
   }
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { overhead, median, cleanEnvironment };
+module.exports = { overhead, median, cleanEnvironment, latencyHistogram };

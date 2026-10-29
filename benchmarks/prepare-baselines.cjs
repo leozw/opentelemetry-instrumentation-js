@@ -24,8 +24,16 @@ fs.writeFileSync(path.join(publishedDir, 'package.json'), JSON.stringify({ name:
 run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', 'elven-opentelemetry-instrumentation-js@1.0.8'], publishedDir);
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const published = path.join(publishedDir, 'node_modules/elven-opentelemetry-instrumentation-js/dist/preload.js');
+const historicalSource = '077c72e1954aef5315325431a4d55cd10a72f90e';
+const historicalDir = path.join(output, 'historical-main');
+fs.mkdirSync(path.join(historicalDir, 'benchmarks'), { recursive: true });
+for (const file of ['run-benchmark.cjs', 'server.cjs']) {
+  fs.writeFileSync(path.join(historicalDir, 'benchmarks', file), run('git', ['show', `${historicalSource}:benchmarks/${file}`], root));
+}
+fs.cpSync(path.dirname(published), path.join(historicalDir, 'dist'), { recursive: true });
+if (!fs.existsSync(path.join(historicalDir, 'node_modules'))) fs.symlinkSync(path.join(publishedDir, 'node_modules'), path.join(historicalDir, 'node_modules'), 'dir');
 fs.writeFileSync(path.join(output, 'baselines.json'), JSON.stringify({
-  reference, published: '1.0.8', at: new Date().toISOString(),
+  reference, published: '1.0.8', historicalSource, historicalHarness: path.join(historicalDir, 'benchmarks/run-benchmark.cjs'), at: new Date().toISOString(),
   hashes: { referencePreload: hash(path.join(referenceDir, 'dist/preload.js')), referenceLock: hash(path.join(referenceDir, 'package-lock.json')), publishedPreload: hash(published), publishedResolvedLock: hash(path.join(publishedDir, 'package-lock.json')) },
   variants: [ { name: 'bare' }, { name: 'published', preload: published },
     { name: 'reference', preload: path.join(referenceDir, 'dist/preload.js') },
