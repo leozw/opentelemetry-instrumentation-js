@@ -43,6 +43,23 @@ test('payload limiter keeps scalar/array boundaries and rejects aggregate event/
   processor.onEnd({ ...span({}), links: [{ attributes: { huge: 'x'.repeat(33000) } }] });
   assert.deepEqual(accepted, [scalar, array]);
 });
+test('redaction retains clean event/link arrays and copies only changed items', () => {
+  const { RedactingSpanExporter } = source('core/exporter/RedactingSpanExporter.ts');
+  let exported;
+  const exporter = new RedactingSpanExporter({ export: spans => { exported = spans; } }, { redactDbStatement: true, hashUserId: true, allowRawAttributes: [] });
+  const clean = Object.freeze({ name: 'clean', attributes: Object.freeze({ method: 'GET' }) });
+  const dirty = Object.freeze({ name: 'dirty', attributes: Object.freeze({ 'db.user': 'private' }) });
+  const events = Object.freeze([clean, dirty, clean]);
+  const links = Object.freeze([clean]);
+  const span = Object.freeze({ attributes: Object.freeze({}), events, links });
+  exporter.export([span], () => {});
+  assert.equal(exported[0].links, links);
+  assert.notEqual(exported[0].events, events);
+  assert.equal(exported[0].events[0], clean);
+  assert.equal(exported[0].events[2], clean);
+  assert.equal(exported[0].events[1].attributes['db.user'], '[REDACTED]');
+  assert.equal(dirty.attributes['db.user'], 'private');
+});
 test('HTTP body histograms remain lazy and record valid content lengths including zero', () => {
   let config;
   let created = 0;

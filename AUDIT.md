@@ -22,7 +22,7 @@ was performed. The npm package identity and the 1.0.8 public API are retained.
 
 ## Verification
 
-Thirty native Node tests, lint, typecheck and build passed. Clean packed CJS,
+Thirty-one native Node tests, lint, typecheck and build passed. Clean packed CJS,
 ESM and preload consumers exported actual OTLP protobuf on Node 18/20/22/24/26.
 A strict packed TypeScript consumer accepts `failOpen: false`, the public handle,
 and both facades without casts. The clean production graph has zero npm
@@ -59,9 +59,9 @@ publication blocker. Original and corrected harness receipts plus CPU profiles
 are retained by hosted CI, including when the gate fails.
 
 Hosted run 40930484098 on ba55622 reproduced the failure on Node 22/24/26:
-original harness candidate p99 deltas were 266.67%, 233.33%, 300%; revised
+audited active harness candidate p99 deltas were 266.67%, 233.33%, 300%; revised
 collector-isolated harness deltas were 233.33%, 200%, 266.67%. Published 1.0.8
-also failed both harnesses. Quantization/order/collector coupling are real
+also failed both active harnesses. Quantization/order/collector coupling are real
 measurement limitations, but do not explain away the remaining cost. Against
 the immutable audited reference, observed candidate throughput improved
 10.90%, 9.52%, 2.92% and CPU/request decreased 13.21%, 10.45%, 3.87% in that
@@ -85,6 +85,27 @@ Signal regressions also cover application once/prependOnce handlers, normal
 signal exit status, removed-earlier handlers and observer cleanup. An observer
 remembers once-handler removal only until the next microtask, without retaining
 application functions or mistaking it for permission to re-signal the process.
+
+Run 40940552957 at fd41733 independently captured real p95. Candidate versus
+bare median paired deltas on Node 22/24/26 were 309.45%, 344.91%, 335.25%;
+public 1.0.8 was 320.92%, 335.03%, 373.64%. The literal unmodified historical
+main harness passed public 1.0.8 on all three runtimes with exporters disabled
+and absent p95 coerced to zero. This distinguishes an invalid historical
+qualification from the substantial active-capture cost, not physical
+impossibility for every workload. No human has accepted a budget/profile
+change. Release remains blocked.
+
+Profiles after the constructor-hook fix are dominated by upstream HTTP and
+context stacks, including native I/O; those inclusive percentages overlap.
+Named privacy functions account for about 1% of active samples, not the whole
+overhead. A further copy-on-write change retains clean event/link arrays and
+clones only changed items, avoiding two arrays and two verification scans per
+clean span without dropping any redaction. A synthetic exporter-only receipt
+cannot establish the HTTP gate or a universal overhead guarantee. More small
+privacy-loop changes are not evidence of a credible path from hundreds of
+percent to 3%; retaining the universal minimal-HTTP budget requires a separately
+qualified instrumentation/context architecture. An alternate representative
+profile requires an explicit human contract decision, not a silent waiver.
 
 Primary references:
 - https://github.com/open-telemetry/opentelemetry-js/releases/tag/v2.12.0

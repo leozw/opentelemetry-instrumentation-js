@@ -31,16 +31,9 @@ export class RedactingSpanExporter implements SpanExporter {
   ): void {
     const sanitized = spans.map(span => {
       const attributes = this.sanitizeAttributes(span.attributes);
-      const events = span.events.map(event => {
-        const attributes = event.attributes && this.sanitizeAttributes(event.attributes);
-        return attributes === event.attributes ? event : { ...event, attributes };
-      });
-      const links = span.links.map(link => {
-        const attributes = link.attributes && this.sanitizeAttributes(link.attributes);
-        return attributes === link.attributes ? link : { ...link, attributes };
-      });
-      if (attributes === span.attributes && events.every((event, i) => event === span.events[i])
-        && links.every((link, i) => link === span.links[i])) return span;
+      const events = this.sanitizeItems(span.events);
+      const links = this.sanitizeItems(span.links);
+      if (attributes === span.attributes && events === span.events && links === span.links) return span;
       return Object.create(span, {
         attributes: { value: attributes }, events: { value: events }, links: { value: links },
       }) as ReadableSpan;
@@ -56,6 +49,20 @@ export class RedactingSpanExporter implements SpanExporter {
 
   public async shutdown(): Promise<void> {
     await this.delegate.shutdown();
+  }
+
+  private sanitizeItems<T extends { attributes?: Attributes }>(source: T[]): T[] {
+    let result = source;
+    for (let i = 0; i < source.length; i++) {
+      const item = source[i];
+      if (!item || item.attributes === undefined) continue;
+      const attributes = this.sanitizeAttributes(item.attributes);
+      if (attributes !== item.attributes) {
+        if (result === source) result = source.slice();
+        result[i] = { ...item, attributes };
+      }
+    }
+    return result;
   }
 
   private sanitizeAttributes(source: Attributes): Attributes {

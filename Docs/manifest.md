@@ -1,3 +1,11 @@
+# Historical Design Aspirations (Not a Support Contract)
+
+This pre-audit document describes aspirations, not implemented or qualified
+coverage. The supported public contract and measured limitations are in
+[README.md](../README.md) and [AUDIT.md](../AUDIT.md). In particular, the 1.0.9
+review candidate is Node-only and remains blocked by its unchanged 3% gate;
+the runtime/framework, zero-impact and universal claims below are not proof.
+
 📜 OTEL JS ELITE 2026
 Universal Observability Instrumentation for JavaScript Applications
 

@@ -219,8 +219,19 @@ universal overhead guarantee. The existing CI budget remains enforced; a failed
 budget is a performance-qualification blocker, not permission to waive the gate.
 Set `BENCHMARK_PRELOAD_PATH` to compare another built/published package using
 the same active-export harness.
-Autocannon exposes p99, not p95; the harness uses p99 and only falls back to
-throughput when latency is unavailable. Missing process samples remain UNKNOWN.
+Autocannon's summary does not expose p95; the public response event supplies the
+raw samples used for p95. The retained integer-ms p99 check falls back to
+throughput only when that measured latency is zero. Missing process samples
+remain UNKNOWN.
+
+Qualification is blocked: hosted run `40940552957` at `fd41733` failed the
+unchanged 3% budget on Node 22/24/26. Active-export candidate p95 deltas against
+bare HTTP were 309.45%, 344.91%, 335.25%; public 1.0.8 also failed (320.92%,
+335.03%, 373.64%). The literal historical harness passed public 1.0.8 with both
+exporters disabled and an absent p95 coerced to zero; that is not active-capture
+qualification. No minimum-runtime, sampling, capture, privacy or dimension
+reduction was accepted to obtain a pass. Do not promote this candidate while
+the gate remains red. See [audit disposition](AUDIT.md).
 
 ## Maintainer Release Gates
 
