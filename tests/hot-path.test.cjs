@@ -10,7 +10,15 @@ function source(file, mocks = {}) {
   }
   const exports = {};
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  new Function('require', 'exports', code)(name => mocks[name] || require(name), exports);
+  new Function('require', 'exports', code)(name => {
+    if (mocks[name]) return mocks[name];
+    if (name.startsWith('.')) {
+      const resolved = path.resolve(__dirname, '..', path.dirname(file), name);
+      if (fs.existsSync(resolved + '.ts')) return source(path.relative(path.resolve(__dirname, '..'), resolved + '.ts'));
+      return require(resolved);
+    }
+    return require(name);
+  }, exports);
   return exports;
 }
 test('copy-on-write redaction preserves frozen originals and sanitizes URL/event/link secrets', () => {
@@ -38,14 +46,21 @@ test('payload limiter keeps scalar/array boundaries and rejects aggregate event/
   const { SpanPayloadLimitProcessor } = source('core/tracing/SpanPayloadLimitProcessor.ts');
   const accepted = [];
   const processor = new SpanPayloadLimitProcessor({ onEnd: span => accepted.push(span) });
-  const span = attributes => ({ name: 'span', status: {}, attributes, events: [], links: [] });
+  const {resourceFromAttributes}=require('@opentelemetry/resources');
+  const context={traceId:'1'.repeat(32),spanId:'2'.repeat(16),traceFlags:1};
+  const span = attributes => ({ name: 'span',kind:0,status: {code:0}, attributes, events: [], links: [],spanContext:()=>context,
+    startTime:[1,0],endTime:[2,0],duration:[1,0],ended:true,resource:resourceFromAttributes({service:'test'}),
+    instrumentationScope:{name:'test'},droppedAttributesCount:0,droppedEventsCount:0,droppedLinksCount:0 });
   const scalar = span({ a: 1, b: true, c: 'text' });
   const array = span({ a: Array(64).fill('x') });
   processor.onEnd(scalar); processor.onEnd(array);
   processor.onEnd(span({ a: Array(65).fill('x') }));
-  processor.onEnd({ ...span({}), events: [{ name: 'e', attributes: { huge: 'x'.repeat(33000) } }] });
-  processor.onEnd({ ...span({}), links: [{ attributes: { huge: 'x'.repeat(33000) } }] });
-  assert.deepEqual(accepted, [scalar, array]);
+  processor.onEnd({ ...span({}), events: [{ name: 'e',time:[1,0], attributes: { huge: 'x'.repeat(33000) } }] });
+  processor.onEnd({ ...span({}), links: [{context, attributes: { huge: 'x'.repeat(33000) } }] });
+  const values = item => ({...item,attributes:{...item.attributes},spanContext:item.spanContext(),resource:{...item.resource.attributes}});
+  assert.deepEqual(accepted.map(values), [scalar, array].map(values));
+  assert.notEqual(accepted[0],scalar);assert.notEqual(accepted[1],array);
+  assert.equal(Object.getPrototypeOf(accepted[0]),Object.prototype);
 });
 test('redaction retains clean event/link arrays and copies only changed items', () => {
   const { RedactingSpanExporter } = source('core/exporter/RedactingSpanExporter.ts');
@@ -69,7 +84,7 @@ test('HTTP body histograms remain lazy and record valid content lengths includin
   let created = 0;
   const records = [];
   const { getCoreInstrumentations } = source('instrumentations/index.ts', {
-    '@opentelemetry/api': { metrics: { getMeter: () => ({ createHistogram: name => { created++; return { record: (value, attrs) => records.push({ name, value, attrs }) }; } }) } },
+    '@opentelemetry/api': { metrics: { getMeterProvider() { return this; }, getMeter: () => ({ createHistogram: name => { created++; return { record: (value, attrs) => records.push({ name, value, attrs }) }; } }) } },
     '@opentelemetry/auto-instrumentations-node': { getNodeAutoInstrumentations: () => [{
       instrumentationName: '@opentelemetry/instrumentation-http', getConfig: () => ({ enabled: true }),
       setConfig: value => { config = { '@opentelemetry/instrumentation-http': value }; }, enable: () => {}, disable: () => {},

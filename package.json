@@ -1,6 +1,6 @@
 {
   "name": "elven-opentelemetry-instrumentation-js",
-  "version": "1.0.9",
+  "version": "2.0.0",
   "description": "Universal Observability Instrumentation for JavaScript Applications",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -23,7 +23,7 @@
     "Docs/manifest.md"
   ],
   "scripts": {
-    "build": "tsup index.ts preload.ts --dts --format cjs,esm --sourcemap --clean --target node18 --platform node",
+    "build": "tsup --config tsup.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -55,6 +55,7 @@
     "typescript-eslint": "^8.56.0"
   },
   "dependencies": {
+    "@eslint-community/regexpp": "4.12.2",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/auto-instrumentations-node": "^0.81.2",
     "@opentelemetry/context-async-hooks": "~2.12.0",
@@ -67,11 +68,13 @@
     "@opentelemetry/resources": "~2.12.0",
     "@opentelemetry/sdk-metrics": "~2.12.0",
     "@opentelemetry/sdk-node": "^0.223.0",
+    "@opentelemetry/sdk-trace": "2.12.0",
     "@opentelemetry/sdk-trace-base": "~2.12.0",
-    "@opentelemetry/semantic-conventions": "^1.39.0"
+    "@opentelemetry/semantic-conventions": "^1.39.0",
+    "re2js": "2.9.1"
   },
   "engines": {
-    "node": "^18.19.0 || >=20.6.0"
+    "node": ">=22.0.0"
   },
   "repository": {
     "type": "git",
@@ -80,6 +83,7 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public",
-    "provenance": true
+    "provenance": true,
+    "tag": "next"
   }
 }

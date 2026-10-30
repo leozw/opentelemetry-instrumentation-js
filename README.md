@@ -1,7 +1,8 @@
 # Elven OpenTelemetry Instrumentation JS
 
-Candidate package version: `1.0.9` (not published by this audit). The earlier
-"v2" headings describe the API design, not an npm `2.x` release.
+Unreleased optional major candidate: `2.0.0`, intended for the `next` channel.
+This dirty source continuation is not a frozen or qualified package. Historical
+`1.0.9` audit artifacts remain separate; no existing user is automatically upgraded.
 
 Official [Node.js integration guide](https://docs.elven.works/elven-observability/integracao-e-instrumentacao/javascript/instrumentacao-node.js-com-elven-observability.html)
 and [documentation source](https://github.com/elvenworks-ps/docs.elven.works).
@@ -22,14 +23,13 @@ npm install elven-opentelemetry-instrumentation-js
 
 ## Runtime support
 
-The compatibility floor is `^18.19.0 || >=20.6.0`, matching OTel 2.x.
-Node 18 and 20 are EOL: compatibility is not security support. Use a maintained,
-patched Node 22, 24 or 26 release. Development tools may require a newer Node
-than the production package. See [Node releases](https://nodejs.org/en/about/previous-releases).
+This optional major targets Node >=22.0.0, not the previous 1.x runtime contract.
+Minimum/current-runtime qualification is pending. Use a maintained patched Node;
+development tools may require a newer version than the production package.
+See [Node releases](https://nodejs.org/en/about/previous-releases).
 
-This patch deliberately uses OTel `2.12.x` / `0.223.x` and auto-instrumentations
-`0.81.x`. The latest generation, OTel `3.x` / `0.300.x`, requires Node >=22.15.0
-and a separate migration. Experimental OTel ranges are restricted to one minor
+This candidate keeps OTel `2.12.x` / `0.223.x` and auto-instrumentations
+`0.81.x`; an OTel major migration is separate. Experimental OTel ranges are restricted to one minor
 generation; package-lock.json records the audited development graph.
 
 v2 supports `runtime: 'node'` only.
@@ -193,14 +193,70 @@ variables can override the trace limits.
 MetricFacade retains at most 128 instrument names in total; use stable names,
 not per-request names. Further names return no-op instruments and increment
 `getDroppedInstruments()`. This is separate from per-instrument attribute
-cardinality. Redaction covers span, event and link attribute maps, without
-mutating the original span. It is not a general PII filter for span names,
-exception messages, resource attributes or arbitrary user-defined strings.
+cardinality. Known-key redaction covers span, event, link, Resource and custom
+MetricFacade attribute maps, without mutating callers. Ordinary dimensions and
+measurement context are retained. This deliberately fixes raw sensitive values;
+explicit privacy opt-outs remain available. It is not a general PII filter for
+span names, exception messages, scope metadata or arbitrary user-defined strings.
 Spans cap attribute string values at 4096 characters, 128 span attributes,
 64 events/links and 64 attributes per event/link. A payload guard drops spans
-over an estimated 64 KiB or with attribute arrays over 64 values before queueing.
-These are telemetry drop limits, not process RSS guarantees; large application
+over a charged 65,536-byte span budget or with attribute arrays over 64 values
+before queueing. Its separate owned Resource budget is 131,072 bytes including
+schema URL; these are not a single serialized-envelope or process RSS guarantee.
+Oversized/malformed spans are dropped with fixed diagnostics and saturating
+accounting. Large application
 objects can still allocate before being handed to OpenTelemetry.
+
+### Optional Major Config And Lifecycle Policy
+
+Active startup admits a detached descriptor-based config before field reads.
+Own enumerable string keys are copied; hidden/symbol keys are ignored, enumerable
+getters, cycles and class instances are rejected. Callbacks retain opaque identity;
+RegExp source/flags use intrinsics without reading caller accessors or lastIndex.
+The config admission ceiling is 1 MiB charged data, 4096 values, 512 containers,
+depth 12 and 65,536 UTF-16 units per string. This is not a Proxy sandbox, a bound
+on application allocation or a general executable-callback retention guarantee.
+Sampler rules remain capped at 32, keys at 128 and literals at 4096 units; custom
+regex uses the bounded engine policy without native fallback. This distribution
+has Node-only root/preload exports and Node 22+ dependencies, including Buffer;
+it does not provide a browser entry, browser qualification or browser polyfill.
+Defaults keep
+ParentBased sampling and avoid allocating custom matcher backends.
+
+Programmatic metric intervals/timeouts must be finite in 1..300000 ms; cardinality
+must be a safe integer in 2..100000 and export batch size in 1..100000. Malformed
+config rejects startup unless an own data `failOpen: true` requests an unstarted
+no-op handle. Global `OTEL_SDK_DISABLED=true` is checked first, even before service
+getters, and returns a successful isolated no-op handle. Both explicit signal
+disable flags, individually or together, use isolated no-op providers for the
+disabled signal, never a foreign application provider. HTTP body-size hooks use
+the same selected meter. Instrumentations are registered once after requested
+provider startup succeeds, with explicit owned/no-op signal bindings.
+Hot global disable affects the new initialization call only: an already active
+generation remains its owner's responsibility and requires that handle's shutdown.
+Duplicate active initialization still reuses that generation and ignores new config.
+Startup rollback tracks components created before provider registration; shutdown
+only unregisters still-current owned trace/meter identities. Callback errors retain
+their original identity even if span recording or ending fails.
+
+The runtime does not create or register a logger provider. Logger correlation
+may consult the application's logging API; it does not own that provider's
+shutdown. Application diagnostic logger configuration remains application-owned;
+this composition does not install a diagnostic logger from `OTEL_LOG_LEVEL`.
+Context and W3C trace-context/baggage propagation use a lazy, register-only shared
+process bootstrap. Existing foreign registrations are not replaced or disabled.
+After pipeline shutdown the bootstrap may remain registered for process lifetime;
+no zero-overhead or full-global-restoration guarantee is made. Internal explicit
+null propagation means do not register a propagator, not disable a foreign one.
+
+Resource behavior is unchanged from the archived public 1.0.8 path: explicit
+service/host/process/runtime fields and configured Resource attributes pass through
+the existing privacy policy. That path disables automatic NodeSDK resource/env
+detectors, so it does not ingest `OTEL_RESOURCE_ATTRIBUTES` or add detector results.
+Provider composition does not silently turn those detectors on. The six span
+limits, owned DTO guards, sampler, metric readers/views, ordinary dimensions,
+measurement context and exemplar behavior are retained; new qualification is
+still required and no performance or browser acceptance is implied.
 
 The Node SDK log exporter is explicitly disabled in this package. Logs are
 correlated with traces, but their shipping remains the responsibility of the
@@ -236,11 +292,19 @@ User ID hashing is deterministic pseudonymization, not irreversible anonymizatio
 npm run lint
 npm run typecheck
 npm test
-npm run benchmark
 ```
 
-The benchmark now requires actual HTTP trace and metric export to a local
-collector; disabling both signals is not an instrumentation benchmark.
+The existing benchmark is historical source, not the optional-major acceptance
+gate. Do not replay it as SDK2 qualification. The new gate requires <=5% latency
+AND throughput regression versus an exact current public archive (expected 1.0.8,
+subject to fresh metadata verification), on the same runtime/config/capture.
+Bare HTTP is a separately reported reference. A fresh bounded controller,
+decoded capture/counter reconciliation, high-resolution quantiles and aggregation,
+an immutable candidate and an explicit quiet-window approval are required first.
+No SDK2 performance execution or acceptance has occurred.
+
+The preserved older benchmark requires active HTTP trace and metric export;
+disabling both signals is not an instrumentation benchmark.
 `npm run benchmark:ci` retains the existing 3% local comparison budget and p99
 guard, and measures the documented p95 from microsecond HDR response samples.
 Missing measurements fail closed. Shared CI and workstation results are noisy observations, not a
@@ -253,7 +317,7 @@ raw samples used for p95. The retained integer-ms p99 check falls back to
 throughput only when that measured latency is zero. Missing process samples
 remain UNKNOWN.
 
-Qualification is blocked: hosted run `40940552957` at `fd41733` failed the
+Historical 1.x qualification was blocked: hosted run `40940552957` at `fd41733` failed the
 unchanged 3% budget on Node 22/24/26. Active-export candidate p95 deltas against
 bare HTTP were 309.45%, 344.91%, 335.25%; public 1.0.8 also failed (320.92%,
 335.03%, 373.64%). The literal historical harness passed public 1.0.8 with both
@@ -277,10 +341,9 @@ audit, and trusted-publisher configuration is not assumed. A coordinator token
 in another repository does not establish this package's provenance. This
 workflow was prepared, not dispatched. See the [npm provenance requirements](https://docs.npmjs.com/generating-provenance-statements/).
 
-Development builds use tsup 9 / esbuild 0.28.2 and require Node 22.18+, 24.11+
-or 26+. This is a development-tool requirement, not a raised package runtime
-floor; emitted code still targets Node 18.19. Performance qualification retains
-the existing 3% gate. CI preserves published 1.0.8, the immutable audited
-reference and the candidate, with original-harness results and separate-process
-collector/CPU receipts. Quantized p99 and shared-host samples are not universal
-overhead guarantees.
+Development uses the existing locked toolchain; its runtime requirements are
+separate from the optional-major production floor. SDK2 emits a Node 22 target.
+Historical CI and quantized/shared-host measurements are not new SDK2 proof or
+universal overhead guarantees. The existing release workflow is not approval
+to publish this optional major; its packed, security, compatibility, independent
+review and new public-relative performance gates remain pending.

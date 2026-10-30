@@ -13,14 +13,16 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { ExporterFactory, RedactingSpanExporter, ResolvedPrivacyConfig } from '../core/exporter';
 import { MetricFacade } from '../core/metrics';
-import { NetworkPropagator } from '../core/propagation';
 import { ResourceBuilder } from '../core/resources';
-import { createSmartSampler } from '../core/sampler';
+import { closeSmartSampler, createSmartSampler } from '../core/sampler';
 import { TracerFacade } from '../core/tracing';
 import { SpanPayloadLimitProcessor } from '../core/tracing/SpanPayloadLimitProcessor';
 import { getCoreInstrumentations } from '../instrumentations';
 import { NodeRuntime } from '../runtime/node';
 import { ObservabilityConfig, ObservabilityHandle } from './types';
+import { ownedString } from '../core/memory/OwnedData';
+import { onceShutdown, ownBoolean } from '../core/memory/ConfigSnapshot';
+import { observabilitySnapshot } from './config';
 
 export let tracer: TracerFacade;
 export let metrics: MetricFacade;
@@ -38,39 +40,58 @@ let removeShutdownHooks: (() => void) | null = null;
 
 const registryKey = Symbol.for('elven.observability.node.lifecycle.v1');
 const registry = globalThis as typeof globalThis & {
-  [registryKey]?: { pending?: Promise<ObservabilityHandle>; handle?: ObservabilityHandle };
+  [registryKey]?: { pending?: Promise<ObservabilityHandle>; handle?: ObservabilityHandle; disabled?: ObservabilityHandle };
 };
 const sharedLifecycle = registry[registryKey] ??= {};
 
 export async function initObservability(config: ObservabilityConfig): Promise<ObservabilityHandle> {
+  // Disable applies before config admission, including a hot call. It does not
+  // take ownership of an existing generation: that owner's shutdown stays explicit.
+  if (getBooleanFromEnv('OTEL_SDK_DISABLED')) {
+    const handle = sharedLifecycle.disabled?.isStarted()
+      ? sharedLifecycle.disabled : sharedLifecycle.disabled = createNoopHandle(true);
+    tracer = handle.tracer; metrics = handle.metrics;
+    return handle;
+  }
   if (sharedLifecycle.handle?.isStarted()) {
     tracer = sharedLifecycle.handle.tracer;
     metrics = sharedLifecycle.handle.metrics;
     return sharedLifecycle.handle;
   }
-  if (!sharedLifecycle.pending) {
-    sharedLifecycle.pending = initLocal(config);
-  }
+  const failOpen = ownBoolean(config, 'failOpen');
+  let pending: Promise<ObservabilityHandle> | undefined;
   try {
-    const handle = await sharedLifecycle.pending;
+    if (!sharedLifecycle.pending) sharedLifecycle.pending = initLocal(observabilitySnapshot(config));
+    pending = sharedLifecycle.pending;
+    const handle = await pending;
     sharedLifecycle.handle = handle;
     tracer = handle.tracer;
     metrics = handle.metrics;
     return handle;
   } catch (error) {
-    if (config.failOpen !== true) throw error;
-    tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion,
-      new ProxyTracerProvider().getTracer(config.service.serviceName));
-    metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion, createNoopMeter());
-    return {
-      tracer, metrics,
-      isStarted: () => false,
-      forceFlush: () => Promise.resolve(),
-      shutdown: () => Promise.resolve(),
-    };
+    if (!failOpen) throw error;
+    const handle = createNoopHandle(false);
+    tracer = handle.tracer; metrics = handle.metrics;
+    return handle;
   } finally {
-    delete sharedLifecycle.pending;
+    if (pending && sharedLifecycle.pending === pending) delete sharedLifecycle.pending;
   }
+}
+
+function createNoopHandle(started: boolean): ObservabilityHandle {
+  let active = started;
+  const name = started ? 'elven-observability-disabled' : 'elven-observability-noop';
+  const handle: ObservabilityHandle = {
+    tracer: new TracerFacade(name, undefined, new ProxyTracerProvider().getTracer(name)),
+    metrics: new MetricFacade(name, undefined, createNoopMeter()),
+    isStarted: () => active,
+    forceFlush: () => Promise.resolve(),
+    shutdown: async () => {
+      active = false;
+      if (sharedLifecycle.disabled === handle) delete sharedLifecycle.disabled;
+    },
+  };
+  return handle;
 }
 
 async function initLocal(config: ObservabilityConfig): Promise<ObservabilityHandle> {
@@ -90,8 +111,15 @@ async function initLocal(config: ObservabilityConfig): Promise<ObservabilityHand
 
 async function startObservability(config: ObservabilityConfig): Promise<ObservabilityHandle> {
   lifecycleState = 'starting';
+  let sampler: Sampler | undefined;
+  const owned: { shutdown(): Promise<void> }[] = [];
+  const own = <T extends { shutdown(): Promise<void> }>(component: T): T => {
+    onceShutdown(component); owned.push(component); return component;
+  };
 
   try {
+    const serviceName = ownedString(config.service.serviceName, 255);
+    const serviceVersion = ownedString(config.service.serviceVersion, 255);
     const runtime = config.runtime ?? 'node';
     if (runtime !== 'node') {
       throw new Error(
@@ -106,10 +134,8 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     if (!tracingEnabled && !metricsEnabled) {
       // Intentional global disable is successful no-op initialization, not a
       // registration failure. Do not borrow another owner's active providers.
-      tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion,
-        sdkDisabled ? new ProxyTracerProvider().getTracer(config.service.serviceName) : undefined);
-      metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion,
-        sdkDisabled ? createNoopMeter() : undefined);
+      tracer = new TracerFacade(serviceName, serviceVersion, new ProxyTracerProvider().getTracer(serviceName));
+      metrics = new MetricFacade(serviceName, serviceVersion, createNoopMeter());
       activeHandle = createHandle();
       lifecycleState = 'started';
       startupPromise = null;
@@ -120,24 +146,25 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     const autoShutdownEnabled = config.autoShutdown
       ?? resolveBooleanEnv(process.env.OTEL_AUTO_SHUTDOWN)
       ?? true;
-    const resource = new ResourceBuilder(config.service).detect();
-    const sampler = createSampler(config, tracingEnabled);
-    const propagator = NetworkPropagator.create();
+    const resource = new ResourceBuilder(config.service, resolvedPrivacy).detect();
+    sampler = createSampler(config, tracingEnabled);
 
     const spanProcessors: SpanProcessor[] = [];
     const traceExporter = createTraceExporter(config, tracingEnabled, resolvedPrivacy);
     if (traceExporter) {
-      spanProcessors.push(
+      own(traceExporter);
+      spanProcessors.push(own(
         new SpanPayloadLimitProcessor(new BatchSpanProcessor(traceExporter, resolveSpanProcessorConfig()))
-      );
+      ));
     }
 
     const metricReaders: PeriodicExportingMetricReader[] = [];
     const metricExporter = createMetricExporter(config, metricsEnabled);
     if (metricExporter) {
+      own(metricExporter);
       const exportIntervalMillis = resolveMetricInterval(config);
       metricReaders.push(
-        new PeriodicExportingMetricReader({
+        own(new PeriodicExportingMetricReader({
           exporter: metricExporter,
           exportIntervalMillis,
           exportTimeoutMillis: resolveMetricTimeout(config, exportIntervalMillis),
@@ -145,32 +172,13 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
             default: resolveMetricCardinalityLimit(config),
           },
           maxExportBatchSize: resolveMetricBatchSize(config),
-        })
+        }))
       );
-    }
-
-    const instrumentations = tracingEnabled || metricsEnabled
-      ? getCoreInstrumentations({
-        ...(config.instrumentations !== undefined
-          ? { config: config.instrumentations }
-          : {}),
-        privacy: resolvedPrivacy,
-      })
-      : [];
-
-    if (instrumentations.length > 0) {
-      unregisterInstrumentations = registerInstrumentations({
-        instrumentations,
-      });
     }
 
     runtimeInstance = new NodeRuntime({
       resource,
       sampler,
-      textMapPropagator: propagator,
-      // We still register synchronously above for early requires, but we MUST pass them 
-      // here as well so NodeSDK will call setMeterProvider() on them when it starts.
-      instrumentations,
       metricReaders,
       spanProcessors,
       views: [
@@ -199,8 +207,24 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
 
     await runtimeInstance.start();
 
-    tracer = new TracerFacade(config.service.serviceName, config.service.serviceVersion);
-    metrics = new MetricFacade(config.service.serviceName, config.service.serviceVersion);
+    const providers = runtimeInstance.getSignalProviders();
+    const instrumentations = getCoreInstrumentations({
+      ...(config.instrumentations !== undefined ? { config: config.instrumentations } : {}),
+      privacy: resolvedPrivacy,
+      meterProvider: providers.meterProvider,
+    });
+    if (instrumentations.length > 0) {
+      try { unregisterInstrumentations = registerInstrumentations({ instrumentations, ...providers }); }
+      catch (error) {
+        // Upstream can throw after enabling only part of this owned list.
+        for (const instrumentation of instrumentations) {
+          try { instrumentation.disable(); } catch { /* Preserve the registration error. */ }
+        }
+        throw error;
+      }
+    }
+    tracer = new TracerFacade(serviceName, serviceVersion, providers.tracerProvider.getTracer(serviceName, serviceVersion));
+    metrics = new MetricFacade(serviceName, serviceVersion, providers.meterProvider.getMeter(serviceName, serviceVersion), resolvedPrivacy);
 
     activeHandle = createHandle();
 
@@ -214,7 +238,11 @@ async function startObservability(config: ObservabilityConfig): Promise<Observab
     return activeHandle;
   } catch (error) {
     try { await runtimeInstance?.shutdown(); } catch { /* Preserve the original startup failure. */ }
-    unregisterInstrumentations?.();
+    // Components can exist before the runtime builds its providers. Their guarded
+    // shutdown also makes retrying cleanup after a partial SDK failure idempotent.
+    await Promise.allSettled(owned.map(component => component.shutdown()));
+    closeSmartSampler(sampler);
+    try { unregisterInstrumentations?.(); } catch { /* Preserve the startup error. */ }
     unregisterInstrumentations = null;
     startupPromise = null;
     runtimeInstance = null;
@@ -234,14 +262,14 @@ async function shutdownObservability(): Promise<void> {
 
   shutdownPromise = (async () => {
     try {
-      // NodeSDK.shutdown flushes processors itself; a preceding failed forceFlush
+      // Provider shutdown flushes processors itself; a preceding failed forceFlush
       // must not skip cleanup or double the exporter retry budget.
       await runtimeInstance?.shutdown();
     } finally {
       removeShutdownHooks?.();
       removeShutdownHooks = null;
       gracefulShutdownHookRegistered = false;
-      unregisterInstrumentations?.();
+      try { unregisterInstrumentations?.(); } catch { /* Other owners must still be reset. */ }
       unregisterInstrumentations = null;
       runtimeInstance = null;
       activeHandle = null;
@@ -362,14 +390,8 @@ function resolveSamplingConfig(config: ObservabilityConfig) {
 
 function resolveMetricInterval(config: ObservabilityConfig): number {
   const fromConfig = config.metrics?.exportIntervalMillis;
-  if (typeof fromConfig === 'number' && fromConfig > 0) return fromConfig;
-
-  const envInterval = process.env.OTEL_METRIC_EXPORT_INTERVAL;
-  if (!envInterval) return 60000;
-
-  const parsed = parseInt(envInterval, 10);
-  if (isNaN(parsed) || parsed <= 0) return 60000;
-  return parsed;
+  if (fromConfig !== undefined) return fromConfig;
+  return resolvePositiveInt(process.env.OTEL_METRIC_EXPORT_INTERVAL, 60_000, 1, 300_000);
 }
 
 function resolveMetricTimeout(config: ObservabilityConfig, intervalMillis: number): number {
@@ -437,10 +459,12 @@ function resolvePrivacyConfig(config: ObservabilityConfig): ResolvedPrivacyConfi
     process.env.OTEL_INSTRUMENTATION_DB_STATEMENT_REDACTION
   );
 
+  const allowRaw = config.privacy?.allowRawAttributes ?? [];
+  if (!Array.isArray(allowRaw) || allowRaw.length > 128) throw new Error('ELVEN_PRIVACY_CONFIG_BUDGET');
   return {
     redactDbStatement: envRedact ?? config.privacy?.redactDbStatement ?? true,
     hashUserId: config.privacy?.hashUserId ?? true,
-    allowRawAttributes: config.privacy?.allowRawAttributes ?? [],
+    allowRawAttributes: allowRaw.map(key => ownedString(key, 255)),
   };
 }
 
@@ -481,7 +505,8 @@ function registerGracefulShutdownHook(): void {
         }),
       ]);
     } catch (err) {
-      console.warn(`[instrumentation-js] graceful shutdown failed on ${signal}:`, err);
+      void err;
+      console.warn('ELVEN_SHUTDOWN_FAILED');
     } finally {
       if (timeout) clearTimeout(timeout);
       cleanup();

@@ -6,7 +6,9 @@ import {
   SpanStatusCode,
   trace,
   Tracer,
+  INVALID_SPAN_CONTEXT,
 } from '@opentelemetry/api';
+import { ownedString } from '../memory/OwnedData';
 
 /**
  * TracerFacade
@@ -18,7 +20,7 @@ export class TracerFacade {
   private _tracer: Tracer;
 
   constructor(name: string, version?: string, tracer?: Tracer) {
-    this._tracer = tracer ?? trace.getTracer(name, version);
+    this._tracer = tracer ?? trace.getTracer(ownedString(name, 255), ownedString(version, 255));
   }
 
   /**
@@ -31,7 +33,7 @@ export class TracerFacade {
     options?: SpanOptions,
     parentContext: Context = apiContext.active()
   ): T | Promise<T> {
-    const span = this._tracer.startSpan(name, options, parentContext);
+    const span = this.startSpan(name, options, parentContext);
     const ctx = trace.setSpan(parentContext, span);
 
     return apiContext.with(ctx, () => {
@@ -44,14 +46,14 @@ export class TracerFacade {
               throw err;
             })
             .finally(() => {
-              span.end();
+              this.end(span);
             });
         }
-        span.end();
+        this.end(span);
         return result;
       } catch (err) {
         this.handleError(span, err);
-        span.end();
+        this.end(span);
         throw err;
       }
     });
@@ -61,14 +63,21 @@ export class TracerFacade {
    * Start a manual span. User is responsible for ending it.
    */
   public startSpan(name: string, options?: SpanOptions, context?: Context): Span {
-    return this._tracer.startSpan(name, options, context);
+    try { return this._tracer.startSpan(name, options, context); }
+    catch { return trace.wrapSpanContext(INVALID_SPAN_CONTEXT); }
   }
 
   private handleError(span: Span, err: unknown) {
-    span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: err instanceof Error ? err.message : String(err),
-    });
-    span.recordException(err instanceof Error ? err : String(err));
+    try {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      span.recordException(err instanceof Error ? err : String(err));
+    } catch { /* Telemetry must not replace the business exception. */ }
+  }
+
+  private end(span: Span): void {
+    try { span.end(); } catch { /* Keep the business result or original exception. */ }
   }
 }

@@ -1,4 +1,4 @@
-import { Attributes, Histogram, Meter, metrics } from '@opentelemetry/api';
+import { Attributes, Histogram, Meter, MeterProvider, metrics } from '@opentelemetry/api';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { Instrumentation } from '@opentelemetry/instrumentation';
 import type { ServerResponse } from 'http';
@@ -9,6 +9,7 @@ import { getAutoInstrumentationsConfig } from './registry';
 export interface BuildInstrumentationsOptions {
   config?: InstrumentationsConfig | boolean;
   privacy: ResolvedPrivacyConfig;
+  meterProvider?: MeterProvider;
 }
 
 export function getCoreInstrumentations(options: BuildInstrumentationsOptions): Instrumentation[] {
@@ -22,7 +23,7 @@ export function getCoreInstrumentations(options: BuildInstrumentationsOptions): 
 
   const getHistograms = () => {
     if (!meter) {
-      meter = metrics.getMeter('@opentelemetry/instrumentation-http');
+      meter = (options.meterProvider ?? metrics.getMeterProvider()).getMeter('@opentelemetry/instrumentation-http');
       requestSizeHistogram = meter.createHistogram('http.server.request.body.size', {
         description: 'Size of the HTTP request body.',
         unit: 'By',

@@ -16,13 +16,13 @@ const SECRET_KEYS = new Set(['db.user', 'db.user.name', 'http.request.header.aut
 const URL_KEYS = new Set(['url.full', 'http.url', 'http.target']);
 
 export class RedactingSpanExporter implements SpanExporter {
-  private _allowRawAttributesSet: Set<string>;
+  private readonly attributes: AttributePrivacy;
 
   constructor(
     private readonly delegate: SpanExporter,
-    private readonly privacy: ResolvedPrivacyConfig
+    privacy: ResolvedPrivacyConfig
   ) {
-    this._allowRawAttributesSet = new Set(privacy.allowRawAttributes);
+    this.attributes = new AttributePrivacy(privacy);
   }
 
   export(
@@ -66,11 +66,22 @@ export class RedactingSpanExporter implements SpanExporter {
   }
 
   private sanitizeAttributes(source: Attributes): Attributes {
+    return this.attributes.sanitize(source);
+  }
+}
+
+/** Same known-key policy for owned Resource, metric and span attributes. */
+export class AttributePrivacy {
+  private readonly allowRaw: Set<string>;
+  constructor(private readonly privacy: ResolvedPrivacyConfig) {
+    this.allowRaw = new Set(privacy.allowRawAttributes);
+  }
+  sanitize(source: Attributes): Attributes {
     let attributes = source;
     for (const key in source) {
       if (!Object.hasOwn(source, key)) continue;
       const value = source[key];
-      if (this._allowRawAttributesSet.has(key)) continue;
+      if (this.allowRaw.has(key)) continue;
       let sanitized = value;
       if (SECRET_KEYS.has(key) || key === 'url.query'
         || (this.privacy.redactDbStatement && DB_STATEMENT_KEYS.has(key))) sanitized = REDACTED;
