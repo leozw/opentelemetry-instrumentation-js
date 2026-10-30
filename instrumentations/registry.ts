@@ -76,7 +76,7 @@ export function getAutoInstrumentationsConfig(options: ResolveInstrumentationsOp
     // Inject our specific custom configs for databases
     if (isEnabled) {
       if (name === 'pg' || name === 'mongodb' || name === 'mysql') {
-        pkgConfig.enhancedDatabaseReporting = true;
+        pkgConfig.enhancedDatabaseReporting = !options.privacy.redactDbStatement;
       }
       if (name === 'graphql') {
         pkgConfig.mergeItems = true;

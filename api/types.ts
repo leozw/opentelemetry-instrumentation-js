@@ -25,6 +25,8 @@ export interface PrivacyConfig {
 }
 
 export interface ObservabilityConfig {
+  /** Startup errors throw by default. true returns an unstarted no-op handle instead. */
+  failOpen?: boolean;
   /** Register process signal handlers for automatic flush and shutdown. */
   autoShutdown?: boolean;
 

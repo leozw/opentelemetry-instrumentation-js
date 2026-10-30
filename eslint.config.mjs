@@ -6,7 +6,7 @@ export default tseslint.config(
   ...tseslint.configs.strict,
   ...tseslint.configs.stylistic,
   {
-    ignores: ['dist', 'node_modules', 'coverage', '**/*.js', '*.mjs', '*.cjs', 'tests/**', 'benchmarks/**'],
+    ignores: ['dist', 'node_modules', 'coverage', '.benchmark-results/**', '**/*.js', '*.mjs', '*.cjs', 'tests/**', 'benchmarks/**'],
   },
   {
     rules: {
@@ -14,6 +14,24 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/consistent-type-definitions': ['error', 'interface'],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
+    },
+  },
+  {
+    files: ['scripts/**/*.cjs'],
+    languageOptions: {
+      globals: Object.fromEntries(['require', 'module', '__dirname', 'process', 'console', 'fetch', 'AbortSignal'].map(name => [name, 'readonly'])),
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
+    // Preserve the independently reviewed portable CJS policy byte-for-byte.
+    files: ['core/matcher/matcher-core.cjs'],
+    languageOptions: { globals: { require: 'readonly', module: 'readonly', Buffer: 'readonly' } },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+      '@typescript-eslint/no-empty-function': 'off',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-useless-escape': 'off',
     },
   },
 );

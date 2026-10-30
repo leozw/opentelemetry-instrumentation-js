@@ -8,5 +8,5 @@ log.log
 coverage/
 .nyc_output/
 .DS_Store
+.benchmark-results/
 yarn.lock
-package-lock.json
